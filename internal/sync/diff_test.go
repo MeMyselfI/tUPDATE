@@ -181,6 +181,103 @@ func TestCompute_MultipleDirs(t *testing.T) {
 	}
 }
 
+func TestResolveRefRoot_DirectLayoutUnchanged(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveRefRoot(tmp, []string{"bin", "www"})
+	if got != tmp {
+		t.Errorf("expected %q, got %q", tmp, got)
+	}
+}
+
+func TestResolveRefRoot_StripsSingleWrapperFolder(t *testing.T) {
+	tmp := t.TempDir()
+	wrapper := filepath.Join(tmp, "tOSCE-Server")
+	if err := os.MkdirAll(filepath.Join(wrapper, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(wrapper, "www"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ResolveRefRoot(tmp, []string{"bin", "www", "etc", "libs"})
+	if got != wrapper {
+		t.Errorf("expected %q, got %q", wrapper, got)
+	}
+}
+
+func TestResolveRefRoot_IgnoresMACOSXSibling(t *testing.T) {
+	tmp := t.TempDir()
+	wrapper := filepath.Join(tmp, "tOSCE-Server")
+	if err := os.MkdirAll(filepath.Join(wrapper, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "__MACOSX"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveRefRoot(tmp, []string{"bin"})
+	if got != wrapper {
+		t.Errorf("expected wrapper %q, got %q", wrapper, got)
+	}
+}
+
+func TestResolveRefRoot_MultipleTopDirsNoStrip(t *testing.T) {
+	tmp := t.TempDir()
+	for _, d := range []string{"folderA", "folderB"} {
+		if err := os.MkdirAll(filepath.Join(tmp, d, "bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := ResolveRefRoot(tmp, []string{"bin"})
+	if got != tmp {
+		t.Errorf("ambiguous wrapper case should not strip, got %q", got)
+	}
+}
+
+func TestResolveRefRoot_WrapperWithoutSyncDirsNoStrip(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "unrelated", "junk"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveRefRoot(tmp, []string{"bin"})
+	if got != tmp {
+		t.Errorf("wrapper without sync dirs should not strip, got %q", got)
+	}
+}
+
+func TestResolveRefRoot_TopLevelFilesIgnored(t *testing.T) {
+	tmp := t.TempDir()
+	wrapper := filepath.Join(tmp, "wrapper")
+	if err := os.MkdirAll(filepath.Join(wrapper, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "README.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveRefRoot(tmp, []string{"bin"})
+	if got != wrapper {
+		t.Errorf("README at top should be ignored, got %q", got)
+	}
+}
+
+func TestResolveRefRoot_SyncDirAtTopWinsOverWrapper(t *testing.T) {
+	// Pathological: a dir named "bin" at top and another wrapper alongside.
+	// We must NOT pick the wrapper if bin/ already exists at the top level.
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "bin", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "extra"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ResolveRefRoot(tmp, []string{"bin"})
+	if got != tmp {
+		t.Errorf("top-level bin/ should win, got %q", got)
+	}
+}
+
 func TestDiffDir_Symlinks(t *testing.T) {
 	tmp := t.TempDir()
 	live := filepath.Join(tmp, "live", "bin")

@@ -142,8 +142,13 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		}
 	}
 
+	refRoot := sync.ResolveRefRoot(tempDir, cfg.SyncDirectories)
+	if refRoot != tempDir {
+		fmt.Fprintf(stderr, s.WrapperDetected+"\n", filepath.Base(refRoot))
+	}
+
 	fmt.Fprintln(stderr, s.ComputingDiff)
-	diffs, err := sync.Compute(tempDir, appRoot, cfg.SyncDirectories)
+	diffs, err := sync.Compute(refRoot, appRoot, cfg.SyncDirectories)
 	if err != nil {
 		fmt.Fprintln(stderr, s.DiffError, err)
 		maybeStartService()
@@ -205,7 +210,7 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 	}
 
 	fmt.Fprintln(stderr, s.ApplyingUpdate)
-	if err := sync.Apply(tempDir, appRoot, diffs); err != nil {
+	if err := sync.Apply(refRoot, appRoot, diffs); err != nil {
 		fmt.Fprintln(stderr, s.SyncError, err)
 		if backupPath != "" {
 			fmt.Fprintln(stderr, s.RestoreFromBackup, backupPath)

@@ -62,10 +62,11 @@ type Strings struct {
 	ServiceStartError string
 
 	// Diff
-	ComputingDiff string
-	DiffError     string
-	DryRunDone    string
-	NoChanges     string
+	ComputingDiff   string
+	DiffError       string
+	DryRunDone      string
+	NoChanges       string
+	WrapperDetected string // "Wrapper folder in ZIP detected: %s — using it as reference root."
 
 	// Backup / Apply
 	BackupQuestion               string
@@ -120,10 +121,11 @@ var en = Strings{
 	ServiceStarting:   "Starting service:",
 	ServiceStartError: "Service start error:",
 
-	ComputingDiff: "Computing diff...",
-	DiffError:     "Diff error:",
-	DryRunDone:    "Dry run finished, no changes made.",
-	NoChanges:     "No changes.",
+	ComputingDiff:   "Computing diff...",
+	DiffError:       "Diff error:",
+	DryRunDone:      "Dry run finished, no changes made.",
+	NoChanges:       "No changes.",
+	WrapperDetected: "Wrapper folder in ZIP detected: %s — using it as reference root.",
 
 	BackupQuestion:               "Create backup of current directories?",
 	BackupCreating:               "Creating backup...",
@@ -176,10 +178,11 @@ var de = Strings{
 	ServiceStarting:   "Service starten:",
 	ServiceStartError: "Service-Start-Fehler:",
 
-	ComputingDiff: "Diff berechnen...",
-	DiffError:     "Diff-Fehler:",
-	DryRunDone:    "Dry-Run beendet, keine Änderungen.",
-	NoChanges:     "Keine Änderungen.",
+	ComputingDiff:   "Diff berechnen...",
+	DiffError:       "Diff-Fehler:",
+	DryRunDone:      "Dry-Run beendet, keine Änderungen.",
+	NoChanges:       "Keine Änderungen.",
+	WrapperDetected: "Wrapper-Ordner im ZIP erkannt: %s — wird als Referenz-Root verwendet.",
 
 	BackupQuestion:               "Backup der aktuellen Verzeichnisse erstellen?",
 	BackupCreating:               "Backup wird erstellt...",
@@ -232,10 +235,11 @@ var fr = Strings{
 	ServiceStarting:   "Démarrage du service :",
 	ServiceStartError: "Erreur de démarrage du service :",
 
-	ComputingDiff: "Calcul du diff...",
-	DiffError:     "Erreur de diff :",
-	DryRunDone:    "Dry-run terminé, aucune modification.",
-	NoChanges:     "Aucune modification.",
+	ComputingDiff:   "Calcul du diff...",
+	DiffError:       "Erreur de diff :",
+	DryRunDone:      "Dry-run terminé, aucune modification.",
+	NoChanges:       "Aucune modification.",
+	WrapperDetected: "Dossier wrapper détecté dans le ZIP : %s — utilisé comme racine de référence.",
 
 	BackupQuestion:               "Créer une sauvegarde des répertoires actuels ?",
 	BackupCreating:               "Création de la sauvegarde...",

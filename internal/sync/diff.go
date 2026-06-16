@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cespare/xxhash/v2"
 )
@@ -57,6 +58,57 @@ func (d *DirDiff) Counts() (add, mod, rem int) {
 		}
 	}
 	return
+}
+
+// ResolveRefRoot returns the directory inside extractedDir that should be
+// treated as the reference root for diffing. It strips a single top-level
+// wrapper folder (e.g. "tOSCE-Server/") when the configured sync.directories
+// are not present directly inside extractedDir but live one level deeper
+// under exactly one sub-directory.
+//
+// Decision logic:
+//  1. If any of syncDirs exists directly inside extractedDir, return
+//     extractedDir unchanged.
+//  2. Otherwise, list the top-level directories. If there is exactly one,
+//     and at least one of the syncDirs exists inside it, return that wrapper.
+//  3. Otherwise, return extractedDir unchanged (ambiguous, no strip).
+//
+// Files at the top level of extractedDir are ignored for the single-dir
+// check — common Mac/Windows ZIPs include things like __MACOSX or README.txt
+// alongside the wrapper folder.
+func ResolveRefRoot(extractedDir string, syncDirs []string) string {
+	for _, sd := range syncDirs {
+		if stat, err := os.Stat(filepath.Join(extractedDir, sd)); err == nil && stat.IsDir() {
+			return extractedDir
+		}
+	}
+
+	entries, err := os.ReadDir(extractedDir)
+	if err != nil {
+		return extractedDir
+	}
+
+	var topDirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if e.Name() == "__MACOSX" || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		topDirs = append(topDirs, e.Name())
+	}
+	if len(topDirs) != 1 {
+		return extractedDir
+	}
+
+	candidate := filepath.Join(extractedDir, topDirs[0])
+	for _, sd := range syncDirs {
+		if stat, err := os.Stat(filepath.Join(candidate, sd)); err == nil && stat.IsDir() {
+			return candidate
+		}
+	}
+	return extractedDir
 }
 
 // Compute diffs every dir under both roots and returns one DirDiff per entry of dirs.
