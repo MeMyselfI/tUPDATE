@@ -6,28 +6,34 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"updater/internal/i18n"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=<value>".
 var version = "dev"
 
 func main() {
+	s := i18n.Get(i18n.Detect())
+
 	logPath, logFile, err := openLogFile(time.Now())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Logfile-Fehler:", err)
+		fmt.Fprintln(os.Stderr, s.LogfileError, err)
 		os.Exit(1)
 	}
 	defer logFile.Close()
 
-	fmt.Fprintln(os.Stderr, "Logfile:", logPath)
-	fmt.Fprintf(logFile, "=== updater %s gestartet: %s ===\n", version, time.Now().Format(time.RFC3339))
+	fmt.Fprintln(os.Stderr, s.BetaWarning)
+	fmt.Fprintln(os.Stderr, s.LogfileLabel, logPath)
+	fmt.Fprintf(logFile, s.StartedMarker+"\n", version, time.Now().Format(time.RFC3339))
+	fmt.Fprintln(logFile, s.BetaWarning)
 
 	stdout := io.MultiWriter(os.Stdout, logFile)
 	stderr := io.MultiWriter(os.Stderr, logFile)
 
 	code := runApp(os.Stdin, stdout, stderr, os.Args[1:], version)
 
-	fmt.Fprintf(logFile, "=== updater beendet: exit=%d, %s ===\n", code, time.Now().Format(time.RFC3339))
+	fmt.Fprintf(logFile, s.EndedMarker+"\n", code, time.Now().Format(time.RFC3339))
 	os.Exit(code)
 }
 

@@ -1,6 +1,8 @@
 # tUPDATE
 
-Plattformübergreifender CLI-Updater für die Java-basierte tOSCE-Server-Anwendung. Lädt eine ZIP mit der aktuellen Server-Version aus dem Netz oder von einer lokalen Quelle, vergleicht den Inhalt mit der laufenden Installation, fragt vor jeder destruktiven Aktion nach und synchronisiert anschließend die konfigurierten Verzeichnisse.
+> **⚠️ BETA**: Dieses Tool befindet sich aktuell in der Beta-Phase. Bitte vor jedem Einsatz ein Backup erstellen lassen und das Verhalten in einer Test-Installation prüfen, bevor produktive Server damit angefasst werden. Beim Start erscheint ein lokalisierter Warnhinweis.
+
+Plattformübergreifender CLI-Updater für die Java-basierte tOSCE-Server-Anwendung. Lädt eine ZIP mit der aktuellen Server-Version aus dem Netz oder von einer lokalen Quelle, vergleicht den Inhalt mit der laufenden Installation, fragt vor jeder destruktiven Aktion nach und synchronisiert anschließend die konfigurierten Verzeichnisse. UI-Sprache wird aus der OS-Locale (`LC_ALL` / `LC_MESSAGES` / `LANG`) gezogen — unterstützt Deutsch, Englisch und Französisch.
 
 Geschrieben in Go, ohne CGo, ohne externe Dienstprogramme. Liefert kleine, stripped Single-File-Binaries für Windows, macOS und Linux.
 
@@ -11,6 +13,8 @@ Geschrieben in Go, ohne CGo, ohne externe Dienstprogramme. Liefert kleine, strip
 - [Konfiguration](#konfiguration)
 - [CLI-Flags](#cli-flags)
 - [Workflow](#workflow)
+- [Sprachunterstützung (i18n)](#sprachunterst%C3%BCtzung-i18n)
+- [Verhalten bei Service-Fehlern](#verhalten-bei-service-fehlern)
 - [Logging](#logging)
 - [Backup](#backup)
 - [Exit-Codes](#exit-codes)
@@ -139,6 +143,47 @@ updater --help                    Hilfe
 ```
 
 **Recovery**: Schlägt ein Schritt nach erfolgreichem Service-Stop fehl, wird der Service per Best-Effort wieder gestartet — keine Verwaisung des gestoppten Dienstes.
+
+## Sprachunterstützung (i18n)
+
+Alle Konsolen- und Prompt-Texte sowie der Beta-Warnhinweis werden in der vom Betriebssystem signalisierten Sprache ausgegeben. Erkennung in dieser Reihenfolge:
+
+1. `LC_ALL`
+2. `LC_MESSAGES`
+3. `LANG`
+
+Die ersten zwei Buchstaben des ersten gesetzten Werts entscheiden:
+
+| Präfix | Sprache | Beispiel-Suffix Prompt |
+|--------|---------|------------------------|
+| `de`   | Deutsch | `[j/N]`, akzeptiert `j`/`ja`/`nein` |
+| `fr`   | Französisch | `[o/N]`, akzeptiert `o`/`oui`/`non` |
+| `en` (Default) | Englisch | `[y/N]`, akzeptiert `y`/`yes`/`no` |
+
+Unbekannte oder leere Locales (`C`, `POSIX`, `it`, …) fallen auf Englisch zurück. Yes-Wörter aller Sprachen werden immer akzeptiert (`y/yes/j/ja/o/oui`), nur Prompt-Suffix und Retry-Hinweis sind locale-spezifisch.
+
+**Beispiele:**
+
+```bash
+LANG=de_DE.UTF-8 ./updater/updater
+LC_ALL=fr_FR.UTF-8 ./updater/updater
+LANG=en_US.UTF-8 ./updater/updater
+```
+
+## Verhalten bei Service-Fehlern
+
+Wenn ein konfiguriertes `service.stop.*`- oder `service.start.*`-Kommando einen Nicht-Null-Exit-Code liefert, gibt tUPDATE den Fehler aus und fragt zurück:
+
+```
+Trotzdem fortfahren? [j/N]
+Continue anyway? [y/N]
+Continuer malgré tout ? [o/N]
+```
+
+- **Bei Ja**: Workflow läuft weiter. Schlug der Stop fehl, gilt der Service als nicht gestoppt — er wird am Ende auch nicht versucht zu starten. Schlug der Start am Ende fehl, wird der Lauf trotz Fehler mit `0` beendet.
+- **Bei Nein**: Lauf bricht mit `4` (Stop) bzw. `6` (Start) ab.
+
+Mit `--no-prompt` (Automation) entfällt die Rückfrage — Service-Fehler beenden den Lauf sofort mit dem passenden Exit-Code.
 
 ## Logging
 

@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,42 @@ func writeFile(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// forceLocale pins the locale env vars for the duration of a test so that
+// assertions against UI strings are deterministic regardless of the dev
+// machine's environment.
+func forceLocale(t *testing.T, lang string) {
+	t.Helper()
+	t.Setenv("LC_ALL", lang)
+	t.Setenv("LC_MESSAGES", "")
+	t.Setenv("LANG", "")
+}
+
+// writePropertiesWithSync writes a properties file with a custom sync.directories
+// value and stop/start commands.
+func writePropertiesWithSync(t *testing.T, dir, syncDirs, stopCmd, startCmd string) string {
+	t.Helper()
+	conf := filepath.Join(dir, "conf", "updater.properties")
+	body := fmt.Sprintf(`download.url = http://127.0.0.1:1/x.zip
+download.timeout.seconds = 30
+proxy.url =
+proxy.user =
+proxy.password =
+proxy.no_proxy =
+sync.directories = %s
+service.stop.windows = %s
+service.stop.darwin = %s
+service.stop.linux = %s
+service.start.windows = %s
+service.start.darwin = %s
+service.start.linux = %s
+service.stop.timeout.seconds = 10
+service.start.timeout.seconds = 10
+backup.directory = backup
+`, syncDirs, stopCmd, stopCmd, stopCmd, startCmd, startCmd, startCmd)
+	writeFile(t, conf, body)
+	return conf
 }
 
 func writeProperties(t *testing.T, dir string) string {
@@ -69,6 +106,7 @@ func buildZip(t *testing.T, path string, entries map[string]string) {
 }
 
 func TestRunApp_VersionFlag(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	var stdout, stderr bytes.Buffer
 	code := runApp(strings.NewReader(""), &stdout, &stderr, []string{"--version"}, "1.2.3")
 	if code != exitOK {
@@ -80,6 +118,7 @@ func TestRunApp_VersionFlag(t *testing.T) {
 }
 
 func TestRunApp_DryRunShowsDiff(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
 	live := filepath.Join(tmp, "live")
 	zipPath := filepath.Join(tmp, "ref.zip")
@@ -124,6 +163,7 @@ func TestRunApp_DryRunShowsDiff(t *testing.T) {
 }
 
 func TestRunApp_AppliesUpdateWithNoPrompt(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
 	live := filepath.Join(tmp, "live")
 	zipPath := filepath.Join(tmp, "ref.zip")
@@ -172,6 +212,7 @@ func TestRunApp_AppliesUpdateWithNoPrompt(t *testing.T) {
 }
 
 func TestRunApp_MissingZipReturnsConfigExit(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
 	live := filepath.Join(tmp, "live")
 	confPath := writeProperties(t, live)
@@ -191,6 +232,7 @@ func TestRunApp_MissingZipReturnsConfigExit(t *testing.T) {
 }
 
 func TestRunApp_MissingConfigReturnsConfigExit(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	args := []string{
@@ -206,6 +248,7 @@ func TestRunApp_MissingConfigReturnsConfigExit(t *testing.T) {
 }
 
 func TestRunApp_NoChangesExitsZeroWithoutPrompt(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
 	live := filepath.Join(tmp, "live")
 	zipPath := filepath.Join(tmp, "ref.zip")
@@ -228,12 +271,13 @@ func TestRunApp_NoChangesExitsZeroWithoutPrompt(t *testing.T) {
 	if code != exitOK {
 		t.Errorf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Keine Änderungen") {
-		t.Errorf("stderr missing 'Keine Änderungen': %s", stderr.String())
+	if !strings.Contains(stderr.String(), "No changes.") {
+		t.Errorf("stderr missing 'No changes.': %s", stderr.String())
 	}
 }
 
 func TestRunApp_SyncDirMissingOnBothSidesIsNoError(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
 	live := filepath.Join(tmp, "live")
 	zipPath := filepath.Join(tmp, "ref.zip")
@@ -296,6 +340,7 @@ backup.directory = backup
 }
 
 func TestRunApp_SyncDirOnlyInZipGetsCreated(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
 	live := filepath.Join(tmp, "live")
 	zipPath := filepath.Join(tmp, "ref.zip")
@@ -330,7 +375,166 @@ func TestRunApp_SyncDirOnlyInZipGetsCreated(t *testing.T) {
 	}
 }
 
+func TestRunApp_LocalesUserVisibleStrings(t *testing.T) {
+	cases := []struct {
+		lang      string
+		dryRunMsg string
+	}{
+		{"en_US.UTF-8", "Dry run finished"},
+		{"de_DE.UTF-8", "Dry-Run beendet"},
+		{"fr_FR.UTF-8", "Dry-run terminé"},
+	}
+	for _, c := range cases {
+		t.Run(c.lang, func(t *testing.T) {
+			forceLocale(t, c.lang)
+			tmp := t.TempDir()
+			live := filepath.Join(tmp, "live")
+			zipPath := filepath.Join(tmp, "ref.zip")
+			confPath := writeProperties(t, live)
+
+			buildZip(t, zipPath, map[string]string{"bin/x": "1"})
+			writeFile(t, filepath.Join(live, "bin", "x"), "0")
+
+			args := []string{
+				"--zip", zipPath,
+				"--config", confPath,
+				"--app-root", live,
+				"--skip-service",
+				"--dry-run",
+			}
+			var stdout, stderr bytes.Buffer
+			code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+			if code != exitOK {
+				t.Fatalf("exit = %d, want 0", code)
+			}
+			if !strings.Contains(stderr.String(), c.dryRunMsg) {
+				t.Errorf("stderr missing %q\n%s", c.dryRunMsg, stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunApp_ServiceStopFailNoPromptAborts(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	// Stop command always fails; start command succeeds.
+	confPath := writePropertiesWithSync(t, live, "bin", "false", "true")
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--no-prompt",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	if code != exitServiceStop {
+		t.Errorf("exit = %d, want exitServiceStop=%d\nstderr: %s", code, exitServiceStop, stderr.String())
+	}
+	// Sync should not have been applied.
+	got, _ := os.ReadFile(filepath.Join(live, "bin", "x"))
+	if string(got) != "v1" {
+		t.Errorf("bin/x modified despite stop fail: %q", got)
+	}
+}
+
+func TestRunApp_ServiceStopFailContinueRunsWorkflow(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writePropertiesWithSync(t, live, "bin", "false", "true")
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	// User answers:
+	//   "Continue anyway?" (after stop fail) → y
+	//   "Create backup?"                     → n
+	//   "Apply update now?"                  → y
+	stdin := strings.NewReader("y\nn\ny\n")
+
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "bin", "x"))
+	if string(got) != "v2" {
+		t.Errorf("bin/x not applied: %q", got)
+	}
+	if !strings.Contains(stdout.String(), "Continue anyway?") {
+		t.Errorf("expected 'Continue anyway?' prompt:\n%s", stdout.String())
+	}
+}
+
+func TestRunApp_ServiceStopFailDeclineAborts(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writePropertiesWithSync(t, live, "bin", "false", "true")
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	// "Continue anyway?" → n
+	stdin := strings.NewReader("n\n")
+
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, args, "test")
+	if code != exitServiceStop {
+		t.Errorf("exit = %d, want exitServiceStop", code)
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "bin", "x"))
+	if string(got) != "v1" {
+		t.Errorf("bin/x changed despite user decline: %q", got)
+	}
+}
+
+func TestRunApp_ServiceStartFailFinalDeclineReturnsStartExit(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	// Stop succeeds; start fails at the end.
+	confPath := writePropertiesWithSync(t, live, "bin", "true", "false")
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	// Backup=n, Update=y, ContinueAnywayAfterStartFail=n.
+	stdin := strings.NewReader("n\ny\nn\n")
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, args, "test")
+	if code != exitServiceStart {
+		t.Errorf("exit = %d, want exitServiceStart=%d\nstderr: %s", code, exitServiceStart, stderr.String())
+	}
+	// Sync should have been applied (start failed AFTER apply).
+	got, _ := os.ReadFile(filepath.Join(live, "bin", "x"))
+	if string(got) != "v2" {
+		t.Errorf("bin/x not applied: %q", got)
+	}
+}
+
 func TestRunApp_UserDeclinesUpdate(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
 	live := filepath.Join(tmp, "live")
 	zipPath := filepath.Join(tmp, "ref.zip")

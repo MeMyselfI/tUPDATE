@@ -14,6 +14,7 @@ import (
 	"updater/internal/archive"
 	"updater/internal/config"
 	"updater/internal/download"
+	"updater/internal/i18n"
 	"updater/internal/paths"
 	"updater/internal/prompt"
 	"updater/internal/service"
@@ -31,11 +32,11 @@ const (
 	exitUserAbort    = 7
 )
 
-// flags holds parsed command-line options.
+// flagSet holds parsed command-line options.
 type flagSet struct {
 	zipPath     string
 	configPath  string
-	appRoot     string // optional override of dirname(executable)
+	appRoot     string
 	dryRun      bool
 	noPrompt    bool
 	skipService bool
@@ -45,6 +46,8 @@ type flagSet struct {
 // runApp executes the updater workflow.
 // Returns one of the exit* constants.
 func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version string) int {
+	s := i18n.Get(i18n.Detect())
+
 	f, err := parseFlags(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -53,13 +56,13 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		return exitConfig
 	}
 	if f.showVersion {
-		fmt.Fprintf(stdout, "tOSCE-Updater %s\n", version)
+		fmt.Fprintf(stdout, "tUPDATE %s\n", version)
 		return exitOK
 	}
 
 	appRoot, err := resolveAppRoot(f.appRoot)
 	if err != nil {
-		fmt.Fprintln(stderr, "Fehler:", err)
+		fmt.Fprintln(stderr, s.ConfigError, err)
 		return exitConfig
 	}
 
@@ -70,18 +73,20 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		fmt.Fprintln(stderr, "Config-Fehler:", err)
+		fmt.Fprintln(stderr, s.ConfigError, err)
 		return exitConfig
 	}
 
 	stopCmd := cfg.StopCommand(runtime.GOOS)
 	startCmd := cfg.StartCommand(runtime.GOOS)
 	if !f.skipService && (stopCmd == "" || startCmd == "") {
-		fmt.Fprintf(stderr, "Keine Service-Kommandos für GOOS=%s konfiguriert.\n", runtime.GOOS)
+		fmt.Fprintf(stderr, s.NoServiceCommandConfig+"\n", runtime.GOOS)
 		return exitConfig
 	}
 
-	zipFile, cleanupZip, exitCode := acquireZip(f, cfg, stderr)
+	prompter := newPrompter(stdin, stdout, f.noPrompt, s)
+
+	zipFile, cleanupZip, exitCode := acquireZip(f, cfg, stderr, s)
 	if exitCode != exitOK {
 		return exitCode
 	}
@@ -89,13 +94,13 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 
 	tempDir, err := os.MkdirTemp("", "updater-extract-*")
 	if err != nil {
-		fmt.Fprintln(stderr, "Temp-Dir-Fehler:", err)
+		fmt.Fprintln(stderr, s.TempDirError, err)
 		return exitExtract
 	}
 	defer os.RemoveAll(tempDir)
 
 	if err := archive.Extract(zipFile, tempDir); err != nil {
-		fmt.Fprintln(stderr, "Extract-Fehler:", err)
+		fmt.Fprintln(stderr, s.ExtractError, err)
 		return exitExtract
 	}
 
@@ -108,30 +113,39 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		if !serviceWasStopped {
 			return
 		}
-		fmt.Fprintln(stderr, "Service starten:", startCmd)
+		fmt.Fprintln(stderr, s.ServiceStarting, startCmd)
 		startCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second)
 		defer cancel()
 		if err := runner.Run(startCtx, startCmd, time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second); err != nil {
-			fmt.Fprintln(stderr, "Service-Start-Fehler:", err)
+			fmt.Fprintln(stderr, s.ServiceStartError, err)
 		}
 	}
 
 	if !f.skipService {
-		fmt.Fprintln(stderr, "Service stoppen:", stopCmd)
+		fmt.Fprintln(stderr, s.ServiceStopping, stopCmd)
 		stopCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ServiceStopTimeoutSecs)*time.Second)
 		err := runner.Run(stopCtx, stopCmd, time.Duration(cfg.ServiceStopTimeoutSecs)*time.Second)
 		cancel()
 		if err != nil {
-			fmt.Fprintln(stderr, "Service-Stop-Fehler:", err)
-			return exitServiceStop
+			fmt.Fprintln(stderr, s.ServiceStopError, err)
+			// In automation mode (--no-prompt) we bail immediately.
+			// Interactively we ask the user whether to proceed without a stopped service.
+			cont, perr := promptContinue(prompter, f.noPrompt, s, stderr)
+			if perr != nil || !cont {
+				return exitServiceStop
+			}
+			// User chose to continue — service was NOT stopped, so we must not
+			// try to "restart" it later.
+			serviceWasStopped = false
+		} else {
+			serviceWasStopped = true
 		}
-		serviceWasStopped = true
 	}
 
-	fmt.Fprintln(stderr, "Diff berechnen...")
+	fmt.Fprintln(stderr, s.ComputingDiff)
 	diffs, err := sync.Compute(tempDir, appRoot, cfg.SyncDirectories)
 	if err != nil {
-		fmt.Fprintln(stderr, "Diff-Fehler:", err)
+		fmt.Fprintln(stderr, s.DiffError, err)
 		maybeStartService()
 		return exitSync
 	}
@@ -140,80 +154,107 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 	summary := sync.Summarize(diffs)
 
 	if f.dryRun {
-		fmt.Fprintln(stderr, "Dry-Run beendet, keine Änderungen.")
+		fmt.Fprintln(stderr, s.DryRunDone)
 		maybeStartService()
 		return exitOK
 	}
 	if !summary.HasChanges() {
-		fmt.Fprintln(stderr, "Keine Änderungen.")
+		fmt.Fprintln(stderr, s.NoChanges)
 		maybeStartService()
 		return exitOK
 	}
 
-	var prompter prompt.Prompter
-	if f.noPrompt {
-		prompter = prompt.Always{Answer: true}
-	} else {
-		prompter = &prompt.Stdin{In: stdin, Out: stdout, MaxAttempts: 3}
-	}
-
-	wantBackup, err := prompter.Confirm("Backup der aktuellen Verzeichnisse erstellen?", false)
+	wantBackup, err := prompter.Confirm(s.BackupQuestion, false)
 	if err != nil {
-		fmt.Fprintln(stderr, "Prompt-Fehler:", err)
+		fmt.Fprintln(stderr, s.PromptError, err)
 		maybeStartService()
 		return exitUserAbort
 	}
 
 	var backupPath string
 	if wantBackup {
-		fmt.Fprintln(stderr, "Backup wird erstellt...")
+		fmt.Fprintln(stderr, s.BackupCreating)
 		backupDir := filepath.Join(appRoot, cfg.BackupDirectory)
 		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, time.Now())
 		if err != nil {
-			fmt.Fprintln(stderr, "Backup-Fehler:", err)
+			fmt.Fprintln(stderr, s.BackupError, err)
 			maybeStartService()
 			return exitSync
 		}
 		backupPath = p
-		fmt.Fprintln(stderr, "Backup:", backupPath)
+		fmt.Fprintln(stderr, s.BackupLabel, backupPath)
 	}
 
-	wantUpdate, err := prompter.Confirm("Update jetzt durchführen?", false)
+	wantUpdate, err := prompter.Confirm(s.UpdateQuestion, false)
 	if err != nil {
-		fmt.Fprintln(stderr, "Prompt-Fehler:", err)
+		fmt.Fprintln(stderr, s.PromptError, err)
 		maybeStartService()
 		return exitUserAbort
 	}
 	if !wantUpdate {
-		fmt.Fprintln(stderr, "Update vom Benutzer abgebrochen.")
+		fmt.Fprintln(stderr, s.UpdateAborted)
 		maybeStartService()
 		return exitUserAbort
 	}
 
-	fmt.Fprintln(stderr, "Update wird angewendet...")
+	fmt.Fprintln(stderr, s.ApplyingUpdate)
 	if err := sync.Apply(tempDir, appRoot, diffs); err != nil {
-		fmt.Fprintln(stderr, "Sync-Fehler:", err)
+		fmt.Fprintln(stderr, s.SyncError, err)
 		if backupPath != "" {
-			fmt.Fprintln(stderr, "Backup zum Wiederherstellen:", backupPath)
+			fmt.Fprintln(stderr, s.RestoreFromBackup, backupPath)
 		}
 		maybeStartService()
 		return exitSync
 	}
-	fmt.Fprintln(stderr, "Update erfolgreich.")
+	fmt.Fprintln(stderr, s.UpdateSuccess)
 
 	if !f.skipService {
-		fmt.Fprintln(stderr, "Service starten:", startCmd)
+		fmt.Fprintln(stderr, s.ServiceStarting, startCmd)
 		startCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second)
 		err := runner.Run(startCtx, startCmd, time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second)
 		cancel()
 		if err != nil {
-			fmt.Fprintln(stderr, "Service-Start-Fehler:", err)
-			return exitServiceStart
+			fmt.Fprintln(stderr, s.ServiceStartError, err)
+			cont, perr := promptContinue(prompter, f.noPrompt, s, stderr)
+			if perr != nil || !cont {
+				return exitServiceStart
+			}
 		}
 	}
 
-	fmt.Fprintln(stderr, "Fertig.")
+	fmt.Fprintln(stderr, s.Done)
 	return exitOK
+}
+
+// newPrompter wires an interactive Stdin prompter localised to s, or
+// returns prompt.Always{true} when running with --no-prompt.
+func newPrompter(stdin io.Reader, stdout io.Writer, noPrompt bool, s i18n.Strings) prompt.Prompter {
+	if noPrompt {
+		return prompt.Always{Answer: true}
+	}
+	return &prompt.Stdin{
+		In:               stdin,
+		Out:              stdout,
+		MaxAttempts:      3,
+		SuffixYesDefault: s.SuffixYesDefault,
+		SuffixNoDefault:  s.SuffixNoDefault,
+		RetryMessage:     s.RetryMessage,
+	}
+}
+
+// promptContinue asks "Continue anyway?" when a service command fails.
+// In --no-prompt mode the answer is always "no" so automation aborts on
+// service failures instead of silently swallowing them.
+func promptContinue(p prompt.Prompter, noPrompt bool, s i18n.Strings, stderr io.Writer) (bool, error) {
+	if noPrompt {
+		return false, nil
+	}
+	cont, err := p.Confirm(s.ContinueAnyway, false)
+	if err != nil {
+		fmt.Fprintln(stderr, s.PromptError, err)
+		return false, err
+	}
+	return cont, nil
 }
 
 func parseFlags(args []string, stderr io.Writer) (*flagSet, error) {
@@ -221,13 +262,13 @@ func parseFlags(args []string, stderr io.Writer) (*flagSet, error) {
 	fs.SetOutput(stderr)
 
 	f := &flagSet{}
-	fs.StringVar(&f.zipPath, "zip", "", "lokale ZIP statt Download nutzen")
+	fs.StringVar(&f.zipPath, "zip", "", "lokale ZIP statt Download nutzen / use a local ZIP instead of downloading")
 	fs.StringVar(&f.configPath, "config", "", "Pfad zu updater.properties (Default: <approot>/conf/updater.properties)")
-	fs.StringVar(&f.appRoot, "app-root", "", "App-Root überschreiben (Default: dirname(executable))")
-	fs.BoolVar(&f.dryRun, "dry-run", false, "nur Diff anzeigen, nichts ändern")
-	fs.BoolVar(&f.noPrompt, "no-prompt", false, "keine Rückfragen (default: ja)")
-	fs.BoolVar(&f.skipService, "skip-service", false, "Service nicht stoppen/starten")
-	fs.BoolVar(&f.showVersion, "version", false, "Version anzeigen")
+	fs.StringVar(&f.appRoot, "app-root", "", "App-Root überschreiben (Default: dirname(dirname(executable)))")
+	fs.BoolVar(&f.dryRun, "dry-run", false, "nur Diff anzeigen, nichts ändern / show diff only")
+	fs.BoolVar(&f.noPrompt, "no-prompt", false, "keine Rückfragen (Backup=ja, Update=ja, Service-Fehler=Abbruch)")
+	fs.BoolVar(&f.skipService, "skip-service", false, "Service nicht stoppen/starten / skip service stop/start")
+	fs.BoolVar(&f.showVersion, "version", false, "Version anzeigen / show version")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -248,18 +289,18 @@ func resolveAppRoot(override string) (string, error) {
 
 // acquireZip resolves the source ZIP via --zip or by downloading.
 // Returns the local path, a cleanup function (always non-nil), and an exit code.
-func acquireZip(f *flagSet, cfg *config.Config, stderr io.Writer) (string, func(), int) {
+func acquireZip(f *flagSet, cfg *config.Config, stderr io.Writer, s i18n.Strings) (string, func(), int) {
 	if f.zipPath != "" {
 		abs, err := filepath.Abs(f.zipPath)
 		if err != nil {
-			fmt.Fprintln(stderr, "Pfad-Fehler:", err)
+			fmt.Fprintln(stderr, s.PathError, err)
 			return "", noopCleanup, exitConfig
 		}
 		if _, err := os.Stat(abs); err != nil {
-			fmt.Fprintln(stderr, "ZIP nicht gefunden:", err)
+			fmt.Fprintln(stderr, s.ZipNotFound, err)
 			return "", noopCleanup, exitConfig
 		}
-		fmt.Fprintln(stderr, "Verwende lokale ZIP:", abs)
+		fmt.Fprintln(stderr, s.UsingLocalZip, abs)
 		return abs, noopCleanup, exitOK
 	}
 
@@ -271,13 +312,13 @@ func acquireZip(f *flagSet, cfg *config.Config, stderr io.Writer) (string, func(
 		},
 	)
 	if err != nil {
-		fmt.Fprintln(stderr, "HTTP-Client-Fehler:", err)
+		fmt.Fprintln(stderr, s.HTTPClientError, err)
 		return "", noopCleanup, exitConfig
 	}
 
 	tmp, err := os.CreateTemp("", "updater-*.zip")
 	if err != nil {
-		fmt.Fprintln(stderr, "Temp-Datei-Fehler:", err)
+		fmt.Fprintln(stderr, s.TempFileError, err)
 		return "", noopCleanup, exitDownload
 	}
 	dest := tmp.Name()
@@ -288,10 +329,10 @@ func acquireZip(f *flagSet, cfg *config.Config, stderr io.Writer) (string, func(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.DownloadTimeoutSecs)*time.Second)
 	defer cancel()
 
-	fmt.Fprintln(stderr, "Download:", cfg.DownloadURL)
+	fmt.Fprintln(stderr, s.DownloadStart, cfg.DownloadURL)
 	if _, err := d.Download(ctx, cfg.DownloadURL, dest); err != nil {
-		fmt.Fprintln(stderr, "Download fehlgeschlagen:", err)
-		fmt.Fprintln(stderr, "Tipp: --zip <path> für lokale Datei nutzen.")
+		fmt.Fprintln(stderr, s.DownloadFailed, err)
+		fmt.Fprintln(stderr, s.DownloadHint)
 		cleanup()
 		return "", noopCleanup, exitDownload
 	}

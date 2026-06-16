@@ -50,15 +50,18 @@ func TestConfirm_EmptyUsesDefault(t *testing.T) {
 	}
 }
 
-func TestConfirm_GermanVariants(t *testing.T) {
-	for _, in := range []string{"j\n", "ja\n", "JA\n", "yes\n", "YES\n"} {
+func TestConfirm_AcceptsLocalizedYesVariants(t *testing.T) {
+	for _, in := range []string{"y\n", "yes\n", "j\n", "ja\n", "JA\n", "o\n", "oui\n", "OUI\n"} {
 		p, _ := newStdin(in)
 		ok, _ := p.Confirm("q?", false)
 		if !ok {
 			t.Errorf("input %q should map to true", in)
 		}
 	}
-	for _, in := range []string{"n\n", "nein\n", "NEIN\n", "no\n"} {
+}
+
+func TestConfirm_AcceptsLocalizedNoVariants(t *testing.T) {
+	for _, in := range []string{"n\n", "no\n", "nein\n", "NEIN\n", "non\n", "NON\n"} {
 		p, _ := newStdin(in)
 		ok, _ := p.Confirm("q?", true)
 		if ok {
@@ -76,13 +79,13 @@ func TestConfirm_ReAsksOnInvalid(t *testing.T) {
 	if !ok {
 		t.Error("expected final yes")
 	}
-	if strings.Count(out.String(), "Bitte 'y' oder 'n'") != 2 {
-		t.Errorf("expected 2 re-ask messages, output:\n%s", out.String())
+	if !strings.Contains(out.String(), "Please enter 'y' or 'n'.") {
+		t.Errorf("expected English retry message, output:\n%s", out.String())
 	}
 }
 
 func TestConfirm_ExhaustsAttemptsReturnsDefault(t *testing.T) {
-	p, _ := newStdin("x\ny\nzzz\n") // 3rd input has 'y' but MaxAttempts=2 stops earlier
+	p, _ := newStdin("x\nzzz\nqux\n")
 	p.MaxAttempts = 2
 	ok, _ := p.Confirm("q?", true)
 	if !ok {
@@ -90,7 +93,7 @@ func TestConfirm_ExhaustsAttemptsReturnsDefault(t *testing.T) {
 	}
 }
 
-func TestConfirm_PromptIncludesDefaultSuffix(t *testing.T) {
+func TestConfirm_DefaultSuffixesEnglish(t *testing.T) {
 	p, out := newStdin("y\n")
 	_, _ = p.Confirm("Backup?", false)
 	if !strings.Contains(out.String(), "[y/N]") {
@@ -100,6 +103,38 @@ func TestConfirm_PromptIncludesDefaultSuffix(t *testing.T) {
 	_, _ = p2.Confirm("Update?", true)
 	if !strings.Contains(out2.String(), "[Y/n]") {
 		t.Errorf("expected [Y/n] suffix, got %q", out2.String())
+	}
+}
+
+func TestConfirm_LocalizedSuffixGerman(t *testing.T) {
+	p := &Stdin{
+		In:               strings.NewReader("y\n"),
+		Out:              &bytes.Buffer{},
+		SuffixNoDefault:  "[j/N]",
+		SuffixYesDefault: "[J/n]",
+		RetryMessage:     "Bitte 'j' oder 'n' eingeben.",
+	}
+	out := p.Out.(*bytes.Buffer)
+	_, _ = p.Confirm("Backup?", false)
+	if !strings.Contains(out.String(), "[j/N]") {
+		t.Errorf("expected localized [j/N], got %q", out.String())
+	}
+}
+
+func TestConfirm_LocalizedRetryFrench(t *testing.T) {
+	p := &Stdin{
+		In:           strings.NewReader("maybe\noui\n"),
+		Out:          &bytes.Buffer{},
+		MaxAttempts:  3,
+		RetryMessage: "Veuillez saisir 'o' ou 'n'.",
+	}
+	out := p.Out.(*bytes.Buffer)
+	ok, _ := p.Confirm("question ?", false)
+	if !ok {
+		t.Error("expected oui → true")
+	}
+	if !strings.Contains(out.String(), "Veuillez saisir 'o' ou 'n'.") {
+		t.Errorf("expected French retry message: %q", out.String())
 	}
 }
 
