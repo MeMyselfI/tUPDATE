@@ -138,6 +138,95 @@ func TestConfirm_LocalizedRetryFrench(t *testing.T) {
 	}
 }
 
+func TestConfirmContinueOrShow_EmptyDefaultsToYes(t *testing.T) {
+	p, _ := newStdin("\n")
+	got, err := p.ConfirmContinueOrShow("q?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != AnswerYes {
+		t.Errorf("empty input answer = %v, want AnswerYes", got)
+	}
+}
+
+func TestConfirmContinueOrShow_YesNoShowAllInputs(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Answer
+	}{
+		{"y\n", AnswerYes},
+		{"yes\n", AnswerYes},
+		{"j\n", AnswerYes},
+		{"ja\n", AnswerYes},
+		{"o\n", AnswerYes},
+		{"oui\n", AnswerYes},
+		{"n\n", AnswerNo},
+		{"no\n", AnswerNo},
+		{"nein\n", AnswerNo},
+		{"non\n", AnswerNo},
+		{"a\n", AnswerShowAll},
+		{"all\n", AnswerShowAll},
+		{"alle\n", AnswerShowAll},
+		{"ALL\n", AnswerShowAll},
+		{"tout\n", AnswerShowAll},
+		{"show\n", AnswerShowAll},
+	}
+	for _, c := range cases {
+		p, _ := newStdin(c.in)
+		got, err := p.ConfirmContinueOrShow("q?")
+		if err != nil {
+			t.Fatalf("input %q: %v", c.in, err)
+		}
+		if got != c.want {
+			t.Errorf("input %q = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestConfirmContinueOrShow_DefaultSuffix(t *testing.T) {
+	p, out := newStdin("y\n")
+	_, _ = p.ConfirmContinueOrShow("q?")
+	if !strings.Contains(out.String(), "[Y/n/a]") {
+		t.Errorf("expected default suffix [Y/n/a], got %q", out.String())
+	}
+}
+
+func TestConfirmContinueOrShow_LocalizedSuffix(t *testing.T) {
+	p := &Stdin{
+		In:                   strings.NewReader("a\n"),
+		Out:                  &bytes.Buffer{},
+		SuffixContinueOrShow: "[J/n/a]",
+	}
+	out := p.Out.(*bytes.Buffer)
+	got, _ := p.ConfirmContinueOrShow("q?")
+	if got != AnswerShowAll {
+		t.Errorf("got %v, want AnswerShowAll", got)
+	}
+	if !strings.Contains(out.String(), "[J/n/a]") {
+		t.Errorf("expected localized suffix [J/n/a], got %q", out.String())
+	}
+}
+
+func TestConfirmContinueOrShow_ReAsksOnInvalid(t *testing.T) {
+	p, out := newStdin("maybe\nfoo\na\n")
+	got, _ := p.ConfirmContinueOrShow("q?")
+	if got != AnswerShowAll {
+		t.Errorf("got %v, want AnswerShowAll", got)
+	}
+	if strings.Count(out.String(), "Please enter 'y' or 'n'.") < 2 {
+		t.Errorf("expected at least 2 retry messages, got: %s", out.String())
+	}
+}
+
+func TestAlways_ContinueOrShowMapsToYesNo(t *testing.T) {
+	if got, _ := (Always{Answer: true}).ConfirmContinueOrShow("?"); got != AnswerYes {
+		t.Errorf("Always{true} ContinueOrShow = %v, want AnswerYes", got)
+	}
+	if got, _ := (Always{Answer: false}).ConfirmContinueOrShow("?"); got != AnswerNo {
+		t.Errorf("Always{false} ContinueOrShow = %v, want AnswerNo", got)
+	}
+}
+
 func TestAlways_ReturnsFixedAnswer(t *testing.T) {
 	if ok, _ := (Always{Answer: true}).Confirm("x?", false); !ok {
 		t.Error("Always{true}.Confirm should return true")

@@ -93,6 +93,54 @@ func TestFormatReport_AllZerosStillRenders(t *testing.T) {
 	}
 }
 
+func TestFormatDetails_PrintsIconsAndPaths(t *testing.T) {
+	diffs := []DirDiff{
+		{Dir: "bin", Changes: []Change{
+			{Path: "run.sh", Type: Modified},
+			{Path: "helper.sh", Type: Added},
+		}},
+		{Dir: "www", Changes: []Change{
+			{Path: "stale.html", Type: Removed},
+		}},
+		{Dir: "etc", Changes: nil}, // empty diff – should be skipped
+	}
+	got := FormatDetails(diffs)
+
+	for _, want := range []string{
+		"[+] bin/helper.sh",
+		"[~] bin/run.sh",
+		"[-] www/stale.html",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "etc/") {
+		t.Errorf("empty diff should not be rendered:\n%s", got)
+	}
+}
+
+func TestFormatDetails_StableSort(t *testing.T) {
+	diffs := []DirDiff{
+		{Dir: "bin", Changes: []Change{
+			{Path: "zeta.sh", Type: Added},
+			{Path: "alpha.sh", Type: Added},
+			{Path: "mid.sh", Type: Added},
+		}},
+	}
+	got := FormatDetails(diffs)
+	want := "[+] bin/alpha.sh\n[+] bin/mid.sh\n[+] bin/zeta.sh\n"
+	if got != want {
+		t.Errorf("unexpected order:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFormatDetails_EmptyReturnsEmpty(t *testing.T) {
+	if got := FormatDetails(nil); got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
 func TestFormatReport_LongDirNameAligned(t *testing.T) {
 	diffs := []DirDiff{
 		{Dir: "very-long-directory-name", Changes: []Change{{Path: "x", Type: Added}}},

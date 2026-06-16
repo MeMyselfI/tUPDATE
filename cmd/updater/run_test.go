@@ -162,6 +162,80 @@ func TestRunApp_DryRunShowsDiff(t *testing.T) {
 	}
 }
 
+func TestRunApp_ShowAllFlowPrintsDetailsThenContinues(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+
+	buildZip(t, zipPath, map[string]string{
+		"bin/run.sh":     "v2",
+		"www/index.html": "<html>v2</html>",
+		"www/added.html": "<html>new</html>",
+	})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+	writeFile(t, filepath.Join(live, "www", "index.html"), "<html>v1</html>")
+	writeFile(t, filepath.Join(live, "www", "stale.html"), "<html>old</html>")
+
+	// Answers: 3-way=a (show), continue-after-details=y, backup=n, update=y
+	stdin := strings.NewReader("a\ny\nn\ny\n")
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--skip-service",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Detailed changes:",
+		"[+] www/added.html",
+		"[~] bin/run.sh",
+		"[~] www/index.html",
+		"[-] www/stale.html",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\n%s", want, out)
+		}
+	}
+	// File should have been applied.
+	if got, _ := os.ReadFile(filepath.Join(live, "bin", "run.sh")); string(got) != "v2" {
+		t.Errorf("bin/run.sh = %q, want v2", got)
+	}
+}
+
+func TestRunApp_ThreeWayAbortStopsBeforeApply(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	stdin := strings.NewReader("n\n")
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--skip-service",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, args, "test")
+	if code != exitUserAbort {
+		t.Errorf("exit = %d, want exitUserAbort", code)
+	}
+	if got, _ := os.ReadFile(filepath.Join(live, "bin", "run.sh")); string(got) != "v1" {
+		t.Errorf("bin/run.sh modified despite abort: %q", got)
+	}
+}
+
 func TestRunApp_AppliesUpdateWithNoPrompt(t *testing.T) {
 	forceLocale(t, "en_US.UTF-8")
 	tmp := t.TempDir()
@@ -452,10 +526,11 @@ func TestRunApp_ServiceStopFailContinueRunsWorkflow(t *testing.T) {
 	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
 
 	// User answers:
-	//   "Continue anyway?" (after stop fail) → y
-	//   "Create backup?"                     → n
-	//   "Apply update now?"                  → y
-	stdin := strings.NewReader("y\nn\ny\n")
+	//   "Continue anyway?"              → y   (after stop fail)
+	//   "Continue/abort/show?"          → y
+	//   "Create backup?"                → n
+	//   "Apply update now?"             → y
+	stdin := strings.NewReader("y\ny\nn\ny\n")
 
 	args := []string{
 		"--zip", zipPath,
@@ -514,8 +589,8 @@ func TestRunApp_ServiceStartFailFinalDeclineReturnsStartExit(t *testing.T) {
 	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
 	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
 
-	// Backup=n, Update=y, ContinueAnywayAfterStartFail=n.
-	stdin := strings.NewReader("n\ny\nn\n")
+	// ContinueOrShow=y, Backup=n, Update=y, ContinueAnywayAfterStartFail=n.
+	stdin := strings.NewReader("y\nn\ny\nn\n")
 	args := []string{
 		"--zip", zipPath,
 		"--config", confPath,
@@ -543,8 +618,8 @@ func TestRunApp_UserDeclinesUpdate(t *testing.T) {
 	buildZip(t, zipPath, map[string]string{"bin/new.sh": "V2\n"})
 	writeFile(t, filepath.Join(live, "bin", "old.sh"), "OLD")
 
-	// First prompt: backup → no. Second prompt: update → no.
-	stdin := strings.NewReader("n\nn\n")
+	// 3-way prompt → no (abort immediately).
+	stdin := strings.NewReader("n\n")
 	args := []string{
 		"--zip", zipPath,
 		"--config", confPath,

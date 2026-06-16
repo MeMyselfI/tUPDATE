@@ -68,18 +68,25 @@ type Strings struct {
 	NoChanges     string
 
 	// Backup / Apply
-	BackupQuestion    string
-	BackupCreating    string
-	BackupLabel       string
-	BackupError       string
-	UpdateQuestion    string
-	UpdateAborted     string
-	ApplyingUpdate    string
-	SyncError         string
-	RestoreFromBackup string
-	UpdateSuccess     string
-	Done              string
-	ContinueAnyway    string
+	BackupQuestion               string
+	BackupCreating               string
+	BackupLabel                  string
+	BackupError                  string
+	UpdateQuestion               string
+	UpdateAborted                string
+	ContinueOrShowQuestion       string // "Continue, abort, or show full file list?"
+	ContinueAfterDetailsQuestion string // "Continue with these changes?"
+	SuffixContinueOrShow         string // "[Y/n/a]" / "[J/n/a]" / "[O/n/a]"
+	DetailsHeader                string // header above file list
+	LegendAdded                  string // "[+] added"
+	LegendModified               string // "[~] modified"
+	LegendRemoved                string // "[-] removed"
+	ApplyingUpdate               string
+	SyncError                    string
+	RestoreFromBackup            string
+	UpdateSuccess                string
+	Done                         string
+	ContinueAnyway               string
 
 	// Prompt UI
 	SuffixYesDefault string // shown when default=true, e.g. "[Y/n]"
@@ -118,18 +125,25 @@ var en = Strings{
 	DryRunDone:    "Dry run finished, no changes made.",
 	NoChanges:     "No changes.",
 
-	BackupQuestion:    "Create backup of current directories?",
-	BackupCreating:    "Creating backup...",
-	BackupLabel:       "Backup:",
-	BackupError:       "Backup error:",
-	UpdateQuestion:    "Apply update now?",
-	UpdateAborted:     "Update aborted by user.",
-	ApplyingUpdate:    "Applying update...",
-	SyncError:         "Sync error:",
-	RestoreFromBackup: "Backup available for restore:",
-	UpdateSuccess:     "Update successful.",
-	Done:              "Done.",
-	ContinueAnyway:    "Continue anyway?",
+	BackupQuestion:               "Create backup of current directories?",
+	BackupCreating:               "Creating backup...",
+	BackupLabel:                  "Backup:",
+	BackupError:                  "Backup error:",
+	UpdateQuestion:               "Apply update now?",
+	UpdateAborted:                "Update aborted by user.",
+	ContinueOrShowQuestion:       "Continue, abort, or show the full file list?",
+	ContinueAfterDetailsQuestion: "Continue with these changes?",
+	SuffixContinueOrShow:         "[Y/n/a]",
+	DetailsHeader:                "Detailed changes:",
+	LegendAdded:                  "[+] added",
+	LegendModified:               "[~] overwritten",
+	LegendRemoved:                "[-] removed",
+	ApplyingUpdate:               "Applying update...",
+	SyncError:                    "Sync error:",
+	RestoreFromBackup:            "Backup available for restore:",
+	UpdateSuccess:                "Update successful.",
+	Done:                         "Done.",
+	ContinueAnyway:               "Continue anyway?",
 
 	SuffixYesDefault: "[Y/n]",
 	SuffixNoDefault:  "[y/N]",
@@ -167,18 +181,25 @@ var de = Strings{
 	DryRunDone:    "Dry-Run beendet, keine Änderungen.",
 	NoChanges:     "Keine Änderungen.",
 
-	BackupQuestion:    "Backup der aktuellen Verzeichnisse erstellen?",
-	BackupCreating:    "Backup wird erstellt...",
-	BackupLabel:       "Backup:",
-	BackupError:       "Backup-Fehler:",
-	UpdateQuestion:    "Update jetzt durchführen?",
-	UpdateAborted:     "Update vom Benutzer abgebrochen.",
-	ApplyingUpdate:    "Update wird angewendet...",
-	SyncError:         "Sync-Fehler:",
-	RestoreFromBackup: "Backup zum Wiederherstellen:",
-	UpdateSuccess:     "Update erfolgreich.",
-	Done:              "Fertig.",
-	ContinueAnyway:    "Trotzdem fortfahren?",
+	BackupQuestion:               "Backup der aktuellen Verzeichnisse erstellen?",
+	BackupCreating:               "Backup wird erstellt...",
+	BackupLabel:                  "Backup:",
+	BackupError:                  "Backup-Fehler:",
+	UpdateQuestion:               "Update jetzt durchführen?",
+	UpdateAborted:                "Update vom Benutzer abgebrochen.",
+	ContinueOrShowQuestion:       "Weitermachen, abbrechen oder die vollständige Dateiliste anzeigen?",
+	ContinueAfterDetailsQuestion: "Mit diesen Änderungen fortfahren?",
+	SuffixContinueOrShow:         "[J/n/a]",
+	DetailsHeader:                "Detaillierte Änderungen:",
+	LegendAdded:                  "[+] neu",
+	LegendModified:               "[~] überschrieben",
+	LegendRemoved:                "[-] gelöscht",
+	ApplyingUpdate:               "Update wird angewendet...",
+	SyncError:                    "Sync-Fehler:",
+	RestoreFromBackup:            "Backup zum Wiederherstellen:",
+	UpdateSuccess:                "Update erfolgreich.",
+	Done:                         "Fertig.",
+	ContinueAnyway:               "Trotzdem fortfahren?",
 
 	SuffixYesDefault: "[J/n]",
 	SuffixNoDefault:  "[j/N]",
@@ -216,18 +237,25 @@ var fr = Strings{
 	DryRunDone:    "Dry-run terminé, aucune modification.",
 	NoChanges:     "Aucune modification.",
 
-	BackupQuestion:    "Créer une sauvegarde des répertoires actuels ?",
-	BackupCreating:    "Création de la sauvegarde...",
-	BackupLabel:       "Sauvegarde :",
-	BackupError:       "Erreur de sauvegarde :",
-	UpdateQuestion:    "Effectuer la mise à jour maintenant ?",
-	UpdateAborted:     "Mise à jour annulée par l'utilisateur.",
-	ApplyingUpdate:    "Application de la mise à jour...",
-	SyncError:         "Erreur de synchronisation :",
-	RestoreFromBackup: "Sauvegarde disponible pour restauration :",
-	UpdateSuccess:     "Mise à jour réussie.",
-	Done:              "Terminé.",
-	ContinueAnyway:    "Continuer malgré tout ?",
+	BackupQuestion:               "Créer une sauvegarde des répertoires actuels ?",
+	BackupCreating:               "Création de la sauvegarde...",
+	BackupLabel:                  "Sauvegarde :",
+	BackupError:                  "Erreur de sauvegarde :",
+	UpdateQuestion:               "Effectuer la mise à jour maintenant ?",
+	UpdateAborted:                "Mise à jour annulée par l'utilisateur.",
+	ContinueOrShowQuestion:       "Continuer, annuler ou afficher la liste complète des fichiers ?",
+	ContinueAfterDetailsQuestion: "Poursuivre avec ces modifications ?",
+	SuffixContinueOrShow:         "[O/n/a]",
+	DetailsHeader:                "Modifications détaillées :",
+	LegendAdded:                  "[+] ajouté",
+	LegendModified:               "[~] écrasé",
+	LegendRemoved:                "[-] supprimé",
+	ApplyingUpdate:               "Application de la mise à jour...",
+	SyncError:                    "Erreur de synchronisation :",
+	RestoreFromBackup:            "Sauvegarde disponible pour restauration :",
+	UpdateSuccess:                "Mise à jour réussie.",
+	Done:                         "Terminé.",
+	ContinueAnyway:               "Continuer malgré tout ?",
 
 	SuffixYesDefault: "[O/n]",
 	SuffixNoDefault:  "[o/N]",

@@ -135,12 +135,29 @@ updater --help                    Hilfe
 ├─ 5  Service-Stop     OS-Kommando aus Config, Exit-Code-Check
 ├─ 6  Diff             Size-Pre-Check + xxhash64 lazy
 ├─ 7  Report           +N ~M -K pro Sync-Dir + Gesamt
-├─ 8  Backup-Prompt    optional: <root>/backup/<timestamp>.zip
-├─ 9  Update-Prompt    Abbruch möglich
-├─ 10 Apply            copy/overwrite/delete, leere Parent-Dirs prunen
-├─ 11 Service-Start    OS-Kommando aus Config
-└─ 12 Cleanup          tmpDir + downloaded ZIP entfernt
+├─ 8  Review-Prompt    3-Wege: Weiter [J] / Abbruch [n] / Liste [a]
+├─ 9  Backup-Prompt    optional: <root>/backup/<timestamp>.zip
+├─ 10 Update-Prompt    Abbruch möglich
+├─ 11 Apply            copy/overwrite/delete, leere Parent-Dirs prunen
+├─ 12 Service-Start    OS-Kommando aus Config
+└─ 13 Cleanup          tmpDir + downloaded ZIP entfernt
 ```
+
+### Review-Prompt (Phase 8)
+
+Direkt nach der Diff-Zusammenfassung fragt tUPDATE in drei Optionen:
+
+```
+Weitermachen, abbrechen oder die vollständige Dateiliste anzeigen? [J/n/a]
+Continue, abort, or show the full file list?                       [Y/n/a]
+Continuer, annuler ou afficher la liste complète des fichiers ?    [O/n/a]
+```
+
+- **J/Y/O** (Default, ENTER): weiter zur Backup-Frage
+- **n**: Abbruch mit Exit-Code 7
+- **a**: vollständige Liste pro Datei ausgeben — Format: `[+] bin/helper.sh` (neu), `[~] bin/run.sh` (überschrieben), `[-] www/stale.html` (gelöscht). Danach folgt eine y/n-Bestätigung (Default = Ja), bevor der Workflow weiterläuft.
+
+Diese Phase hilft besonders bei verdächtig großen Diffs (z. B. ZIP mit unerwarteter Ordnerstruktur → viele False-Positive-Deletions): die Liste zeigt die genauen Pfade vor jeder destruktiven Aktion.
 
 **Recovery**: Schlägt ein Schritt nach erfolgreichem Service-Stop fehl, wird der Service per Best-Effort wieder gestartet — keine Verwaisung des gestoppten Dienstes.
 

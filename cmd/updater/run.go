@@ -164,6 +164,13 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		return exitOK
 	}
 
+	// Three-way prompt: continue / abort / show full file list.
+	if !runDiffReviewLoop(prompter, diffs, s, stdout, stderr) {
+		fmt.Fprintln(stderr, s.UpdateAborted)
+		maybeStartService()
+		return exitUserAbort
+	}
+
 	wantBackup, err := prompter.Confirm(s.BackupQuestion, false)
 	if err != nil {
 		fmt.Fprintln(stderr, s.PromptError, err)
@@ -233,12 +240,42 @@ func newPrompter(stdin io.Reader, stdout io.Writer, noPrompt bool, s i18n.String
 		return prompt.Always{Answer: true}
 	}
 	return &prompt.Stdin{
-		In:               stdin,
-		Out:              stdout,
-		MaxAttempts:      3,
-		SuffixYesDefault: s.SuffixYesDefault,
-		SuffixNoDefault:  s.SuffixNoDefault,
-		RetryMessage:     s.RetryMessage,
+		In:                   stdin,
+		Out:                  stdout,
+		MaxAttempts:          3,
+		SuffixYesDefault:     s.SuffixYesDefault,
+		SuffixNoDefault:      s.SuffixNoDefault,
+		SuffixContinueOrShow: s.SuffixContinueOrShow,
+		RetryMessage:         s.RetryMessage,
+	}
+}
+
+// runDiffReviewLoop drives the three-way "continue / abort / show full list"
+// prompt that runs immediately after the diff summary. Returns true if the
+// workflow should continue, false if the user aborted.
+func runDiffReviewLoop(p prompt.Prompter, diffs []sync.DirDiff, s i18n.Strings, stdout, stderr io.Writer) bool {
+	for {
+		answer, err := p.ConfirmContinueOrShow(s.ContinueOrShowQuestion)
+		if err != nil {
+			fmt.Fprintln(stderr, s.PromptError, err)
+			return false
+		}
+		switch answer {
+		case prompt.AnswerYes:
+			return true
+		case prompt.AnswerNo:
+			return false
+		case prompt.AnswerShowAll:
+			fmt.Fprintln(stdout, s.DetailsHeader)
+			fmt.Fprintln(stdout, "  ", s.LegendAdded, "  ", s.LegendModified, "  ", s.LegendRemoved)
+			fmt.Fprint(stdout, sync.FormatDetails(diffs))
+			ok, err := p.Confirm(s.ContinueAfterDetailsQuestion, true)
+			if err != nil {
+				fmt.Fprintln(stderr, s.PromptError, err)
+				return false
+			}
+			return ok
+		}
 	}
 }
 

@@ -86,6 +86,52 @@ func FormatReport(diffs []DirDiff) string {
 	return b.String()
 }
 
+// FormatDetails renders one line per file change in the diff, prefixed with
+// an icon indicating the action:
+//
+//	[+] dir/relpath   -- new file
+//	[~] dir/relpath   -- existing file will be overwritten
+//	[-] dir/relpath   -- existing file will be removed
+//
+// Files within each dir are sorted alphabetically; dirs are emitted in the
+// order they appear in the slice. Empty diffs return an empty string.
+func FormatDetails(diffs []DirDiff) string {
+	var b strings.Builder
+	for _, d := range diffs {
+		if len(d.Changes) == 0 {
+			continue
+		}
+		sorted := make([]Change, len(d.Changes))
+		copy(sorted, d.Changes)
+		sortChanges(sorted)
+		for _, c := range sorted {
+			fmt.Fprintf(&b, "%s %s/%s\n", iconFor(c.Type), d.Dir, c.Path)
+		}
+	}
+	return b.String()
+}
+
+func iconFor(t ChangeType) string {
+	switch t {
+	case Added:
+		return "[+]"
+	case Modified:
+		return "[~]"
+	case Removed:
+		return "[-]"
+	}
+	return "[?]"
+}
+
+// sortChanges orders changes by relative path (lexicographic) for stable output.
+func sortChanges(c []Change) {
+	for i := 1; i < len(c); i++ {
+		for j := i; j > 0 && c[j-1].Path > c[j].Path; j-- {
+			c[j-1], c[j] = c[j], c[j-1]
+		}
+	}
+}
+
 func columnWidth(prefix string, rows []reportRow, total int, get func(reportRow) int) int {
 	w := len(fmt.Sprintf("%s%d", prefix, total))
 	for _, r := range rows {
