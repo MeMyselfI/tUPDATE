@@ -56,6 +56,10 @@ backup.directory = backup
 pgdump.path.windows = %s
 pgdump.path.darwin  = %s
 pgdump.path.linux   = %s
+pgdump.host     = localhost
+pgdump.user     = testuser
+pgdump.password = testpw
+pgdump.db       = testdb
 `, syncDirs, stopCmd, stopCmd, stopCmd, startCmd, startCmd, startCmd,
 		nonexistentPgDump, nonexistentPgDump, nonexistentPgDump)
 	writeFile(t, conf, body)
@@ -84,6 +88,10 @@ backup.directory = backup
 pgdump.path.windows = ` + nonexistentPgDump + `
 pgdump.path.darwin  = ` + nonexistentPgDump + `
 pgdump.path.linux   = ` + nonexistentPgDump + `
+pgdump.host     = localhost
+pgdump.user     = testuser
+pgdump.password = testpw
+pgdump.db       = testdb
 `
 	writeFile(t, conf, body)
 	return conf
@@ -1041,7 +1049,7 @@ func TestRunApp_DryRunChecksPassWhenLocalZipAndWritableBackup(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Check backup-dir writable: OK") {
+	if !strings.Contains(stderr.String(), "Check backup_dir_writable: OK") {
 		t.Errorf("expected writable-OK in stderr:\n%s", stderr.String())
 	}
 }
@@ -1078,5 +1086,73 @@ func TestRunApp_DryRunChecksFailExit9WhenBackupDirUnwritable(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "FAIL") {
 		t.Errorf("expected FAIL marker in stderr:\n%s", stderr.String())
+	}
+}
+
+func TestProbeServiceBinary_FoundAndNotFound(t *testing.T) {
+	// On any unix-y CI box /bin/sh exists; on Windows we can't rely on it.
+	if ok, _ := probeServiceBinary("/bin/sh -c true"); !ok {
+		t.Errorf("expected /bin/sh to resolve")
+	}
+	ok, detail := probeServiceBinary("definitely-not-a-binary-tupdate-xyz stop foo")
+	if ok {
+		t.Errorf("expected nonexistent binary to fail, detail=%q", detail)
+	}
+	if ok, _ := probeServiceBinary(""); ok {
+		t.Errorf("empty command should fail")
+	}
+}
+
+func TestProbePgdumpString_PrefersConfThenEnv(t *testing.T) {
+	t.Setenv("PGDATABASE", "")
+	if ok, _ := probePgdumpString("appdb", "PGDATABASE", "pgdump.db"); !ok {
+		t.Error("conf value should win")
+	}
+	t.Setenv("PGDATABASE", "envdb")
+	ok, detail := probePgdumpString("", "PGDATABASE", "pgdump.db")
+	if !ok || !strings.Contains(detail, "PGDATABASE env") {
+		t.Errorf("env should win when conf empty, ok=%v detail=%q", ok, detail)
+	}
+	t.Setenv("PGDATABASE", "")
+	ok, detail = probePgdumpString("", "PGDATABASE", "pgdump.db")
+	if ok {
+		t.Errorf("expected fail when both empty, detail=%q", detail)
+	}
+}
+
+func TestProbePgdumpPassword_NeverLeaksValue(t *testing.T) {
+	t.Setenv("PGPASSWORD", "")
+	t.Setenv("HOME", t.TempDir()) // no .pgpass present
+	if ok, _ := probePgdumpPassword(""); ok {
+		t.Error("expected fail when nothing is set")
+	}
+	ok, detail := probePgdumpPassword("super-s3cret-password")
+	if !ok {
+		t.Errorf("conf value should satisfy check")
+	}
+	if strings.Contains(detail, "super-s3cret-password") {
+		t.Errorf("detail leaked the password: %q", detail)
+	}
+	t.Setenv("PGPASSWORD", "env-s3cret-password")
+	ok, detail = probePgdumpPassword("")
+	if !ok || strings.Contains(detail, "env-s3cret-password") {
+		t.Errorf("env path leaked password, ok=%v detail=%q", ok, detail)
+	}
+}
+
+func TestProbePgdumpPassword_PgpassFileSatisfies(t *testing.T) {
+	t.Setenv("PGPASSWORD", "")
+	tmpHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpHome, ".pgpass"),
+		[]byte("localhost:5432:db:user:pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", tmpHome)
+	ok, detail := probePgdumpPassword("")
+	if !ok {
+		t.Errorf("~/.pgpass should satisfy, detail=%q", detail)
+	}
+	if !strings.Contains(detail, ".pgpass") {
+		t.Errorf("expected detail to mention .pgpass, got %q", detail)
 	}
 }

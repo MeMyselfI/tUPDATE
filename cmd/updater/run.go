@@ -383,17 +383,31 @@ func diffPerDirMap(diffs []sync.DirDiff) map[string]map[string]int {
 func runDryRunChecks(cfg *config.Config, appRoot string, f *flagSet, emit *machine.Emitter, stderr io.Writer, s i18n.Strings) bool {
 	allOK := true
 
-	// 1. Backup directory writable. We mkdir-p the configured backup.directory
-	// and try to create + remove a probe file. This is fast and non-destructive.
-	backupDir := filepath.Join(appRoot, cfg.BackupDirectory)
-	bdOK, bdDetail := probeBackupDirWritable(backupDir)
-	emit.DryRunCheck("backup_dir_writable", bdOK, bdDetail)
-	fmt.Fprintf(stderr, "Check backup-dir writable: %s (%s)\n", okOrFail(bdOK), bdDetail)
-	if !bdOK {
-		allOK = false
+	// runCheck wraps the emit + stderr + allOK plumbing so each individual
+	// probe can stay focused on the "what to test" question.
+	runCheck := func(name string, fatal bool, ok bool, detail string) {
+		emit.DryRunCheck(name, ok, detail)
+		fmt.Fprintf(stderr, "Check %s: %s (%s)\n", name, okOrFail(ok), detail)
+		if !ok && fatal {
+			allOK = false
+		}
 	}
 
-	// 2. pg_dump binary present (skip when --no-db-backup).
+	// 1. Backup directory writable.
+	backupDir := filepath.Join(appRoot, cfg.BackupDirectory)
+	bdOK, bdDetail := probeBackupDirWritable(backupDir)
+	runCheck("backup_dir_writable", true, bdOK, bdDetail)
+
+	// 2. Service binaries (skip when --skip-service).
+	if !f.skipService {
+		stopOK, stopDetail := probeServiceBinary(cfg.StopCommand(runtime.GOOS))
+		runCheck("service_stop_binary", true, stopOK, stopDetail)
+
+		startOK, startDetail := probeServiceBinary(cfg.StartCommand(runtime.GOOS))
+		runCheck("service_start_binary", true, startOK, startDetail)
+	}
+
+	// 3. pg_dump binary + connection params (skip when --no-db-backup).
 	if !f.noDBBackup {
 		pgBin := resolvePgDumpBinary(cfg.PgdumpBinary(runtime.GOOS))
 		pgOK := pgBin != ""
@@ -401,24 +415,130 @@ func runDryRunChecks(cfg *config.Config, appRoot string, f *flagSet, emit *machi
 		if !pgOK {
 			pgDetail = "pg_dump_not_found"
 		}
-		emit.DryRunCheck("pgdump_binary", pgOK, pgDetail)
-		fmt.Fprintf(stderr, "Check pg_dump binary: %s (%s)\n", okOrFail(pgOK), pgDetail)
-		if !pgOK {
-			allOK = false
-		}
+		runCheck("pgdump_binary", true, pgOK, pgDetail)
+
+		// host / port: informational (libpq has sane defaults).
+		hostOK, hostDetail := probePgdumpString(cfg.PgdumpHost, "PGHOST", "pgdump.host")
+		runCheck("pgdump_conn_host", false, hostOK, hostDetail)
+
+		// database / user: required.
+		dbOK, dbDetail := probePgdumpString(cfg.PgdumpDB, "PGDATABASE", "pgdump.db")
+		runCheck("pgdump_conn_database", true, dbOK, dbDetail)
+
+		userOK, userDetail := probePgdumpString(cfg.PgdumpUser, "PGUSER", "pgdump.user")
+		runCheck("pgdump_conn_user", true, userOK, userDetail)
+
+		// password: required, but check three sources without ever emitting the value.
+		pwOK, pwDetail := probePgdumpPassword(cfg.PgdumpPassword)
+		runCheck("pgdump_conn_password", true, pwOK, pwDetail)
+
+		// connectivity: informational — pg_isready optional, never fatal.
+		connOK, connDetail := probePgIsReady(cfg)
+		runCheck("pgdump_connectivity", false, connOK, connDetail)
 	}
 
-	// 3. Download URL probe — only when no local --zip is supplied.
+	// 4. Download URL probe — only when no local --zip is supplied.
 	if f.zipPath == "" {
 		urlOK, urlDetail := probeDownloadURL(cfg)
-		emit.DryRunCheck("download_url", urlOK, urlDetail)
-		fmt.Fprintf(stderr, "Check download URL: %s (%s)\n", okOrFail(urlOK), urlDetail)
-		if !urlOK {
-			allOK = false
-		}
+		runCheck("download_url", true, urlOK, urlDetail)
 	}
 
 	return allOK
+}
+
+// probeServiceBinary takes the configured service.stop / service.start command
+// (e.g. "launchctl stop org.example.myapp"), takes the first token and asks
+// exec.LookPath whether that command is callable. We deliberately don't try
+// to query the service itself — that would require parsing platform-specific
+// output, and the failure mode we care about ("launchctl not installed") is
+// already covered by the binary check.
+func probeServiceBinary(cmd string) (bool, string) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return false, "empty command"
+	}
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return false, "empty command"
+	}
+	bin := fields[0]
+	path, err := exec.LookPath(bin)
+	if err != nil {
+		return false, bin + ": not found on PATH"
+	}
+	return true, path
+}
+
+// probePgdumpString reports whether a libpq value is set by the conf-key, by
+// the matching PG* env var, or nowhere. The detail names the winning source
+// so the operator can tell which precedence layer is providing the value.
+func probePgdumpString(confValue, envName, confKeyName string) (bool, string) {
+	if strings.TrimSpace(confValue) != "" {
+		return true, "set via " + confKeyName
+	}
+	if v := strings.TrimSpace(os.Getenv(envName)); v != "" {
+		return true, "set via " + envName + " env"
+	}
+	return false, "not set (conf " + confKeyName + " + env " + envName + " both empty)"
+}
+
+// probePgdumpPassword checks the three places libpq looks for a password
+// without ever leaking the value itself. The check is satisfied if any one
+// of pgdump.password, PGPASSWORD, or a readable ~/.pgpass is present.
+func probePgdumpPassword(confValue string) (bool, string) {
+	if strings.TrimSpace(confValue) != "" {
+		return true, "set via pgdump.password"
+	}
+	if strings.TrimSpace(os.Getenv("PGPASSWORD")) != "" {
+		return true, "set via PGPASSWORD env"
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		pgpass := filepath.Join(home, ".pgpass")
+		if _, err := os.Stat(pgpass); err == nil {
+			return true, "set via " + pgpass
+		}
+	}
+	return false, "not set (no pgdump.password, no PGPASSWORD, no ~/.pgpass)"
+}
+
+// probePgIsReady runs the pg_isready utility against the same connection
+// parameters tUPDATE would hand to pg_dump. Pure read-only side-effect-free
+// TCP handshake; the standard PostgreSQL health-check probe.
+//
+// pg_isready not on PATH is reported as "skipped" with ok=true — it's an
+// optional check, not having it should not fail dry-run.
+func probePgIsReady(cfg *config.Config) (bool, string) {
+	bin, err := exec.LookPath("pg_isready")
+	if err != nil {
+		return true, "pg_isready not on PATH (skipped)"
+	}
+
+	args := []string{"-t", "5"}
+	if h := strings.TrimSpace(cfg.PgdumpHost); h != "" {
+		args = append(args, "-h", h)
+	}
+	if p := strings.TrimSpace(cfg.PgdumpPort); p != "" {
+		args = append(args, "-p", p)
+	}
+	if u := strings.TrimSpace(cfg.PgdumpUser); u != "" {
+		args = append(args, "-U", u)
+	}
+	if d := strings.TrimSpace(cfg.PgdumpDB); d != "" {
+		args = append(args, "-d", d)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, runErr := cmd.CombinedOutput()
+	trimmed := strings.TrimSpace(string(out))
+	if runErr == nil {
+		return true, trimmed
+	}
+	if trimmed == "" {
+		trimmed = runErr.Error()
+	}
+	return false, trimmed
 }
 
 // probeBackupDirWritable creates the backup directory if missing, then writes
@@ -616,11 +736,18 @@ LOCALE / OUTPUT
                            (setzt --no-prompt voraus; Logfile bekommt ebenfalls JSON)
 
 DRY-RUN-CHECKS
-  --dry-run                fuehrt Pre-Flight-Checks aus:
-                             * backup-Verzeichnis beschreibbar
-                             * pg_dump-Binary aufloesbar (skipped mit --no-db-backup)
-                             * download.url erreichbar (Range-Request, ohne Vollladen)
-                           Exit 0 = alle ok | Exit 9 = mindestens ein Check failed
+  --dry-run                fuehrt Pre-Flight-Checks aus (ohne Mutation):
+                             backup_dir_writable      (fatal)
+                             service_stop_binary      (fatal, skipped mit --skip-service)
+                             service_start_binary     (fatal, skipped mit --skip-service)
+                             pgdump_binary            (fatal, skipped mit --no-db-backup)
+                             pgdump_conn_host         (informational)
+                             pgdump_conn_database     (fatal)
+                             pgdump_conn_user         (fatal)
+                             pgdump_conn_password     (fatal, kein Wert geloggt)
+                             pgdump_connectivity      (informational, via pg_isready)
+                             download_url             (fatal, skipped mit --zip)
+                           Exit 0 = alle fatalen ok | Exit 9 = mindestens einer failed
                            Bei --zip wird statt URL-Probe der lokale ZIP-Pfad geprueft
                            und zusaetzlich Extract + Diff gezeigt.
 

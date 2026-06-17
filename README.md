@@ -214,23 +214,41 @@ Beispielausgabe (Java-Aufruf, `--no-files-backup --no-db-backup`):
 
 ### Pre-Flight-Checks (--dry-run)
 
-`--dry-run` führt jetzt drei Checks aus **ohne** Mutation:
+`--dry-run` führt eine Reihe nicht-mutativer Checks aus, **bevor** irgendetwas am Dateisystem oder Service angefasst wird.
 
-1. **Backup-Verzeichnis beschreibbar** — `<app-root>/<backup.directory>` wird ggf. angelegt, eine Probe-Datei geschrieben + gelöscht.
-2. **pg_dump-Binary verfügbar** — Reihenfolge: `pgdump.path.<os>` → `exec.LookPath("pg_dump")`. Mit `--no-db-backup` wird der Check übersprungen.
-3. **Download-URL erreichbar** — HTTP-`Range: bytes=0-1023`-Request gegen `download.url`; jeder 2xx-Status zählt als OK, der Body wird nicht gelesen, die Verbindung wird sofort geschlossen. Mit `--zip <pfad>` entfällt dieser Check.
+| Check | Was wird geprüft? | fatal? |
+|-------|-------------------|--------|
+| `backup_dir_writable` | `<app-root>/<backup.directory>` wird ggf. angelegt, Probe-Datei geschrieben + sofort gelöscht | **ja** |
+| `service_stop_binary` | erstes Token aus `service.stop.<os>` (z.B. `launchctl`, `systemctl`, `net`) muss auf PATH sein. Skipped mit `--skip-service` | **ja** |
+| `service_start_binary` | dito für `service.start.<os>` | **ja** |
+| `pgdump_binary` | `pgdump.path.<os>` ODER `exec.LookPath("pg_dump")`. Skipped mit `--no-db-backup` | **ja** |
+| `pgdump_conn_host` | `pgdump.host` ODER `PGHOST`-Env (informational; libpq fällt auf unix socket / localhost zurück) | nein |
+| `pgdump_conn_database` | `pgdump.db` ODER `PGDATABASE`-Env | **ja** |
+| `pgdump_conn_user` | `pgdump.user` ODER `PGUSER`-Env | **ja** |
+| `pgdump_conn_password` | `pgdump.password` ODER `PGPASSWORD`-Env ODER `~/.pgpass` existiert. Der Wert selbst wird **nie** geloggt, nur die Quelle | **ja** |
+| `pgdump_connectivity` | `pg_isready` (read-only TCP-Handshake) mit denselben Connection-Parametern. Wird übersprungen wenn `pg_isready` nicht auf PATH ist | nein |
+| `download_url` | HTTP-`Range: bytes=0-1023`-GET gegen `download.url`. Body wird nicht gelesen. Skipped mit `--zip <pfad>` | **ja** |
+
+Fatal = Check-Fail → exit 9. Informational = Check-Fail wird trotzdem geloggt, beeinflusst Exit-Code aber nicht (DB kann legitim grad down sein, libpq hat Defaults für Host).
 
 Ausgabe (Human-Modus):
 
 ```
-Check backup-dir writable: OK (/opt/myapp/backup)
-Check pg_dump binary: OK (/opt/homebrew/opt/postgresql@16/bin/pg_dump)
-Check download URL: OK (HTTP 206 https://example.org/releases/app-latest.zip)
+Check backup_dir_writable: OK (/opt/myapp/backup)
+Check service_stop_binary: OK (/bin/launchctl)
+Check service_start_binary: OK (/bin/launchctl)
+Check pgdump_binary: OK (/opt/homebrew/bin/pg_dump)
+Check pgdump_conn_host: OK (set via pgdump.host)
+Check pgdump_conn_database: OK (set via pgdump.db)
+Check pgdump_conn_user: OK (set via PGUSER env)
+Check pgdump_conn_password: OK (set via /Users/me/.pgpass)
+Check pgdump_connectivity: OK (localhost:5432 - accepting connections)
+Check download_url: OK (HTTP 206 https://example.org/releases/app-latest.zip)
 ```
 
-Im `--json`-Modus pro Check ein `{"event":"dry_run_check","name":"...","ok":true|false,"detail":"..."}`.
+Im `--json`-Modus pro Check ein `{"event":"dry_run_check","name":"...","ok":true|false,"detail":"..."}` mit der Quelle (bei conf-Wert wins → `set via <key>`, bei env wins → `set via <ENV> env`, bei `.pgpass` → `set via <pfad>`). Der Passwort-Wert selbst taucht nirgends auf.
 
-Exit-Codes: **0** = alle Checks ok, **9** = mindestens ein Check fehlgeschlagen.
+Exit-Codes: **0** = alle fatalen Checks ok, **9** = mindestens ein fataler Check fehlgeschlagen.
 
 Wird `--dry-run` mit `--zip` kombiniert, werden zusätzlich Extract + Diff ausgeführt (kein Service-Stop, kein Apply), damit der Operator „was würde sich ändern?" sieht.
 
