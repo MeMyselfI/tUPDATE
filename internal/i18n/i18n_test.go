@@ -153,3 +153,31 @@ func TestStrings_PromptSuffixesPerLanguage(t *testing.T) {
 		t.Errorf("FR suffix = %q", fr.SuffixNoDefault)
 	}
 }
+
+func TestParseLang_AcceptsAllThree(t *testing.T) {
+	cases := map[string]Lang{
+		"de": LangDE,
+		"DE": LangDE,
+		"en": LangEN,
+		"fr": LangFR,
+		" Fr ": LangFR,
+	}
+	for input, want := range cases {
+		got, ok := ParseLang(input)
+		if !ok {
+			t.Errorf("ParseLang(%q) ok=false", input)
+		}
+		if got != want {
+			t.Errorf("ParseLang(%q) = %v, want %v", input, got, want)
+		}
+	}
+}
+
+func TestParseLang_RejectsUnknownAndEmpty(t *testing.T) {
+	for _, input := range []string{"", "xx", "esperanto"} {
+		_, ok := ParseLang(input)
+		if ok {
+			t.Errorf("ParseLang(%q) should be ok=false", input)
+		}
+	}
+}

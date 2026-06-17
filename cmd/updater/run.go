@@ -6,16 +6,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"updater/internal/archive"
 	"updater/internal/config"
 	"updater/internal/download"
 	"updater/internal/i18n"
+	"updater/internal/machine"
 	"updater/internal/paths"
 	"updater/internal/prompt"
 	"updater/internal/service"
@@ -31,6 +34,7 @@ const (
 	exitSync         = 5
 	exitServiceStart = 6
 	exitUserAbort    = 7
+	exitDryRunCheck  = 9
 )
 
 // flagSet holds parsed command-line options.
@@ -46,14 +50,20 @@ type flagSet struct {
 	noDBBackup          bool
 	ignoreServiceErrors bool
 	detach              bool
+	jsonOut             bool
+	lang                string
 	showVersion         bool
 }
 
 // runApp executes the updater workflow.
+//
+// stdout / stderr are for localized human output; emitWriter is for the
+// machine-readable NDJSON stream. In --json mode the caller is expected to
+// pass io.Discard for stdout/stderr (so localized text vanishes) and the
+// real stdout/multiwriter for emitWriter. In human mode it's the opposite.
+//
 // Returns one of the exit* constants.
-func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version string) int {
-	s := i18n.Get(i18n.Detect())
-
+func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string, version string) (code int) {
 	f, err := parseFlags(args, stdout, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -61,14 +71,40 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		}
 		return exitConfig
 	}
+	// --lang is validated before --version so an invalid value is reported
+	// even when the user just wanted to print the version.
+	lang, ok := resolveLang(f.lang)
+	if !ok {
+		fmt.Fprintf(stderr, "--lang: invalid value %q, expected de|en|fr\n", f.lang)
+		return exitConfig
+	}
+	s := i18n.Get(lang)
+
 	if f.showVersion {
 		fmt.Fprintf(stdout, "tUPDATE %s\n", version)
 		return exitOK
 	}
 
+	if f.jsonOut && !f.noPrompt {
+		fmt.Fprintln(stderr, "--json requires --no-prompt")
+		return exitConfig
+	}
+
+	// JSON mode contract: localized human writes from inside runApp must not
+	// leak. We honor it here regardless of caller discipline so tests + future
+	// callers can rely on the same behavior main.go provides.
+	if f.jsonOut {
+		stdout = io.Discard
+		stderr = io.Discard
+	}
+
+	emit := machine.New(emitWriter, f.jsonOut)
+	defer func() { emit.Exit(code) }()
+
 	appRoot, err := resolveAppRoot(f.appRoot)
 	if err != nil {
 		fmt.Fprintln(stderr, s.ConfigError, err)
+		emit.FatalError("app_root", err.Error())
 		return exitConfig
 	}
 
@@ -80,6 +116,7 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, s.ConfigError, err)
+		emit.FatalError("config", err.Error())
 		return exitConfig
 	}
 
@@ -87,12 +124,31 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 	startCmd := cfg.StartCommand(runtime.GOOS)
 	if !f.skipService && (stopCmd == "" || startCmd == "") {
 		fmt.Fprintf(stderr, s.NoServiceCommandConfig+"\n", runtime.GOOS)
+		emit.FatalError("config", "no service commands for "+runtime.GOOS)
 		return exitConfig
 	}
 
 	prompter := newPrompter(stdin, stdout, f.noPrompt, s)
 
-	zipFile, cleanupZip, exitCode := acquireZip(f, cfg, stderr, s)
+	// --dry-run pre-flight: prove the destructive steps would succeed
+	// (writable backup dir, pg_dump binary present, download URL reachable)
+	// without actually mutating anything. If --zip is given we still fall
+	// through to extract+diff so operators see "what would change".
+	if f.dryRun {
+		allOK := runDryRunChecks(cfg, appRoot, f, emit, stderr, s)
+		if !allOK {
+			return exitDryRunCheck
+		}
+		if f.zipPath == "" {
+			// No local ZIP, only the URL probe was possible. We deliberately
+			// do not run the full download in --dry-run.
+			fmt.Fprintln(stderr, s.DryRunDone)
+			return exitOK
+		}
+		// Continue: extract + diff against the user-provided local ZIP.
+	}
+
+	zipFile, cleanupZip, exitCode := acquireZip(f, cfg, emit, stderr, s)
 	if exitCode != exitOK {
 		return exitCode
 	}
@@ -101,12 +157,14 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 	tempDir, err := os.MkdirTemp("", "updater-extract-*")
 	if err != nil {
 		fmt.Fprintln(stderr, s.TempDirError, err)
+		emit.FatalError("extract", err.Error())
 		return exitExtract
 	}
 	defer os.RemoveAll(tempDir)
 
 	if err := archive.Extract(zipFile, tempDir); err != nil {
 		fmt.Fprintln(stderr, s.ExtractError, err)
+		emit.FatalError("extract", err.Error())
 		return exitExtract
 	}
 
@@ -127,23 +185,23 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		}
 	}
 
-	if !f.skipService {
+	if !f.skipService && !f.dryRun {
 		fmt.Fprintln(stderr, s.ServiceStopping, stopCmd)
 		stopCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ServiceStopTimeoutSecs)*time.Second)
 		err := runner.Run(stopCtx, stopCmd, time.Duration(cfg.ServiceStopTimeoutSecs)*time.Second)
 		cancel()
 		if err != nil {
 			fmt.Fprintln(stderr, s.ServiceStopError, err)
+			emit.ServiceStopFailed(err.Error())
 			// --ignore-service-errors forces continue.
 			// Otherwise --no-prompt aborts and interactive mode asks.
 			cont, perr := promptContinue(prompter, f.noPrompt, f.ignoreServiceErrors, s, stderr)
 			if perr != nil || !cont {
 				return exitServiceStop
 			}
-			// We're continuing despite the service NOT being stopped, so we
-			// must not try to "restart" it later.
 			serviceWasStopped = false
 		} else {
+			emit.ServiceStopOK()
 			serviceWasStopped = true
 		}
 	}
@@ -152,17 +210,20 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 	if refRoot != tempDir {
 		fmt.Fprintf(stderr, s.WrapperDetected+"\n", filepath.Base(refRoot))
 	}
+	emit.ExtractDone(refRoot)
 
 	fmt.Fprintln(stderr, s.ComputingDiff)
 	diffs, err := sync.Compute(refRoot, appRoot, cfg.SyncDirectories)
 	if err != nil {
 		fmt.Fprintln(stderr, s.DiffError, err)
+		emit.FatalError("diff", err.Error())
 		maybeStartService()
 		return exitSync
 	}
 
 	fmt.Fprint(stdout, sync.FormatReport(diffs))
 	summary := sync.Summarize(diffs)
+	emit.Diff(summary.Added, summary.Modified, summary.Removed, diffPerDirMap(diffs))
 
 	if f.dryRun {
 		fmt.Fprintln(stderr, s.DryRunDone)
@@ -203,11 +264,13 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, backupTs)
 		if err != nil {
 			fmt.Fprintln(stderr, s.BackupError, err)
+			emit.BackupFilesFailed(err.Error())
 			maybeStartService()
 			return exitSync
 		}
 		backupPath = p
 		fmt.Fprintln(stderr, s.BackupLabel, backupPath)
+		emit.BackupFilesOK(backupPath, fileSize(backupPath))
 	}
 
 	var wantDBBackup bool
@@ -225,6 +288,7 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		pgBin := resolvePgDumpBinary(cfg.PgdumpBinary(runtime.GOOS))
 		if pgBin == "" {
 			fmt.Fprintln(stderr, s.DBBackupSkipped)
+			emit.BackupDBSkipped("pg_dump_not_found")
 		} else {
 			dumpPath := archive.PgDumpPath(backupDir, backupTs)
 			fmt.Fprintln(stderr, s.DBBackupStarting)
@@ -239,8 +303,10 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 			dumpCancel()
 			if err != nil {
 				fmt.Fprintln(stderr, s.DBBackupFailed, err)
+				emit.BackupDBFailed(err.Error())
 			} else {
 				fmt.Fprintln(stderr, s.DBBackupDone, dumpPath)
+				emit.BackupDBOK(dumpPath, fileSize(dumpPath))
 			}
 		}
 	}
@@ -260,6 +326,7 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 	fmt.Fprintln(stderr, s.ApplyingUpdate)
 	if err := sync.Apply(refRoot, appRoot, diffs); err != nil {
 		fmt.Fprintln(stderr, s.SyncError, err)
+		emit.ApplyFailed(err.Error())
 		if backupPath != "" {
 			fmt.Fprintln(stderr, s.RestoreFromBackup, backupPath)
 		}
@@ -267,6 +334,7 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		return exitSync
 	}
 	fmt.Fprintln(stderr, s.UpdateSuccess)
+	emit.ApplyOK()
 
 	if !f.skipService {
 		fmt.Fprintln(stderr, s.ServiceStarting, startCmd)
@@ -275,15 +343,141 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		cancel()
 		if err != nil {
 			fmt.Fprintln(stderr, s.ServiceStartError, err)
+			emit.ServiceStartFailed(err.Error())
 			cont, perr := promptContinue(prompter, f.noPrompt, f.ignoreServiceErrors, s, stderr)
 			if perr != nil || !cont {
 				return exitServiceStart
 			}
+		} else {
+			emit.ServiceStartOK()
 		}
 	}
 
 	fmt.Fprintln(stderr, s.Done)
 	return exitOK
+}
+
+// fileSize is a best-effort os.Stat wrapper used to enrich emit events. A
+// stat failure is not worth aborting the workflow for, so we just report 0.
+func fileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// diffPerDirMap converts the diff slice into a nested map shape suitable for
+// the {"added":N,"modified":M,"removed":K} per-directory JSON payload.
+func diffPerDirMap(diffs []sync.DirDiff) map[string]map[string]int {
+	out := make(map[string]map[string]int, len(diffs))
+	for i := range diffs {
+		a, m, r := diffs[i].Counts()
+		out[diffs[i].Dir] = map[string]int{"added": a, "modified": m, "removed": r}
+	}
+	return out
+}
+
+// runDryRunChecks fires the pre-flight checks for --dry-run.
+// Returns true if every check passed.
+func runDryRunChecks(cfg *config.Config, appRoot string, f *flagSet, emit *machine.Emitter, stderr io.Writer, s i18n.Strings) bool {
+	allOK := true
+
+	// 1. Backup directory writable. We mkdir-p the configured backup.directory
+	// and try to create + remove a probe file. This is fast and non-destructive.
+	backupDir := filepath.Join(appRoot, cfg.BackupDirectory)
+	bdOK, bdDetail := probeBackupDirWritable(backupDir)
+	emit.DryRunCheck("backup_dir_writable", bdOK, bdDetail)
+	fmt.Fprintf(stderr, "Check backup-dir writable: %s (%s)\n", okOrFail(bdOK), bdDetail)
+	if !bdOK {
+		allOK = false
+	}
+
+	// 2. pg_dump binary present (skip when --no-db-backup).
+	if !f.noDBBackup {
+		pgBin := resolvePgDumpBinary(cfg.PgdumpBinary(runtime.GOOS))
+		pgOK := pgBin != ""
+		pgDetail := pgBin
+		if !pgOK {
+			pgDetail = "pg_dump_not_found"
+		}
+		emit.DryRunCheck("pgdump_binary", pgOK, pgDetail)
+		fmt.Fprintf(stderr, "Check pg_dump binary: %s (%s)\n", okOrFail(pgOK), pgDetail)
+		if !pgOK {
+			allOK = false
+		}
+	}
+
+	// 3. Download URL probe — only when no local --zip is supplied.
+	if f.zipPath == "" {
+		urlOK, urlDetail := probeDownloadURL(cfg)
+		emit.DryRunCheck("download_url", urlOK, urlDetail)
+		fmt.Fprintf(stderr, "Check download URL: %s (%s)\n", okOrFail(urlOK), urlDetail)
+		if !urlOK {
+			allOK = false
+		}
+	}
+
+	return allOK
+}
+
+// probeBackupDirWritable creates the backup directory if missing, then writes
+// and deletes a probe file. Returns ok and a short detail string for emit.
+func probeBackupDirWritable(dir string) (bool, string) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, "mkdir " + dir + ": " + err.Error()
+	}
+	probe := filepath.Join(dir, ".tupdate-write-probe")
+	if err := os.WriteFile(probe, []byte("probe"), 0o644); err != nil {
+		return false, "write " + probe + ": " + err.Error()
+	}
+	_ = os.Remove(probe)
+	return true, dir
+}
+
+// probeDownloadURL kicks off the configured download with a Range header
+// asking for the first 1 KiB, then cancels the connection. The goal is to
+// learn whether the URL is reachable + the HTTP status is 2xx without doing
+// the full multi-hundred-megabyte download.
+func probeDownloadURL(cfg *config.Config) (bool, string) {
+	client, err := download.NewClient(
+		time.Duration(cfg.DownloadTimeoutSecs)*time.Second,
+		download.ProxyConfig{
+			URL: cfg.ProxyURL, User: cfg.ProxyUser,
+			Password: cfg.ProxyPassword, NoProxy: cfg.ProxyNoProxy,
+		},
+	)
+	if err != nil {
+		return false, "client: " + err.Error()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.DownloadURL, nil)
+	if err != nil {
+		return false, "request: " + err.Error()
+	}
+	req.Header.Set("Range", "bytes=0-1023")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, "do: " + err.Error()
+	}
+	defer resp.Body.Close()
+
+	// Treat any 2xx (200 full body, 206 partial) as reachable. We do not read
+	// the body; closing it short-circuits the rest of the transfer.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return true, fmt.Sprintf("HTTP %d %s", resp.StatusCode, cfg.DownloadURL)
+	}
+	return false, fmt.Sprintf("HTTP %d %s", resp.StatusCode, cfg.DownloadURL)
+}
+
+func okOrFail(ok bool) string {
+	if ok {
+		return "OK"
+	}
+	return "FAIL"
 }
 
 // newPrompter wires an interactive Stdin prompter localised to s, or
@@ -371,6 +565,8 @@ func parseFlags(args []string, stdout, stderr io.Writer) (*flagSet, error) {
 	fs.BoolVar(&f.noFilesBackup, "no-files-backup", false, "ZIP-Backup ueberspringen / skip files (ZIP) backup")
 	fs.BoolVar(&f.noDBBackup, "no-db-backup", false, "DB-Backup (pg_dump) ueberspringen / skip DB backup")
 	fs.BoolVar(&f.ignoreServiceErrors, "ignore-service-errors", false, "bei Stop/Start-Fehler weitermachen / continue past service stop/start failures")
+	fs.BoolVar(&f.jsonOut, "json", false, "NDJSON-Events auf stdout (setzt --no-prompt voraus) / NDJSON events on stdout")
+	fs.StringVar(&f.lang, "lang", "", "UI-Sprache erzwingen: de | en | fr (Default: aus Env)")
 	fs.BoolVar(&f.showVersion, "version", false, "Version anzeigen / show version")
 
 	fs.Usage = func() { writeHelp(stdout) }
@@ -414,6 +610,20 @@ INTERACTION
 LOGGING
   --logfile <path>         eigener Logfile-Pfad (Default: <TempDir>/updater-<ts>.log)
 
+LOCALE / OUTPUT
+  --lang <de|en|fr>        UI-Sprache erzwingen (Default: aus LC_ALL / LC_MESSAGES / LANG)
+  --json                   NDJSON-Events auf stdout statt lokalisierter Ausgabe
+                           (setzt --no-prompt voraus; Logfile bekommt ebenfalls JSON)
+
+DRY-RUN-CHECKS
+  --dry-run                fuehrt Pre-Flight-Checks aus:
+                             * backup-Verzeichnis beschreibbar
+                             * pg_dump-Binary aufloesbar (skipped mit --no-db-backup)
+                             * download.url erreichbar (Range-Request, ohne Vollladen)
+                           Exit 0 = alle ok | Exit 9 = mindestens ein Check failed
+                           Bei --zip wird statt URL-Probe der lokale ZIP-Pfad geprueft
+                           und zusaetzlich Extract + Diff gezeigt.
+
 MISC
   --version                Version anzeigen / show version
   --help                   diese Hilfe / this help
@@ -431,6 +641,12 @@ EXAMPLES
             --logfile /var/log/myapp/updater.log \
             --zip /tmp/release.zip \
             --ignore-service-errors
+
+  Java/CI-Aufruf mit maschinenlesbarer NDJSON-Ausgabe:
+    updater --json --no-prompt --zip /tmp/release.zip
+
+  Pre-Flight-Check ohne Mutation (Download nur kurz angetestet):
+    updater --dry-run
 `
 	fmt.Fprint(w, help)
 }
@@ -448,15 +664,17 @@ func resolveAppRoot(override string) (string, error) {
 
 // acquireZip resolves the source ZIP via --zip or by downloading.
 // Returns the local path, a cleanup function (always non-nil), and an exit code.
-func acquireZip(f *flagSet, cfg *config.Config, stderr io.Writer, s i18n.Strings) (string, func(), int) {
+func acquireZip(f *flagSet, cfg *config.Config, emit *machine.Emitter, stderr io.Writer, s i18n.Strings) (string, func(), int) {
 	if f.zipPath != "" {
 		abs, err := filepath.Abs(f.zipPath)
 		if err != nil {
 			fmt.Fprintln(stderr, s.PathError, err)
+			emit.FatalError("zip_path", err.Error())
 			return "", noopCleanup, exitConfig
 		}
 		if _, err := os.Stat(abs); err != nil {
 			fmt.Fprintln(stderr, s.ZipNotFound, err)
+			emit.FatalError("zip_not_found", err.Error())
 			return "", noopCleanup, exitConfig
 		}
 		fmt.Fprintln(stderr, s.UsingLocalZip, abs)
@@ -472,12 +690,14 @@ func acquireZip(f *flagSet, cfg *config.Config, stderr io.Writer, s i18n.Strings
 	)
 	if err != nil {
 		fmt.Fprintln(stderr, s.HTTPClientError, err)
+		emit.FatalError("http_client", err.Error())
 		return "", noopCleanup, exitConfig
 	}
 
 	tmp, err := os.CreateTemp("", "updater-*.zip")
 	if err != nil {
 		fmt.Fprintln(stderr, s.TempFileError, err)
+		emit.FatalError("temp_file", err.Error())
 		return "", noopCleanup, exitDownload
 	}
 	dest := tmp.Name()
@@ -489,16 +709,31 @@ func acquireZip(f *flagSet, cfg *config.Config, stderr io.Writer, s i18n.Strings
 	defer cancel()
 
 	fmt.Fprintln(stderr, s.DownloadStart, cfg.DownloadURL)
-	if _, err := d.Download(ctx, cfg.DownloadURL, dest); err != nil {
+	emit.DownloadStart(cfg.DownloadURL)
+	n, err := d.Download(ctx, cfg.DownloadURL, dest)
+	if err != nil {
 		fmt.Fprintln(stderr, s.DownloadFailed, err)
 		fmt.Fprintln(stderr, s.DownloadHint)
+		emit.DownloadFailed(err.Error())
 		cleanup()
 		return "", noopCleanup, exitDownload
 	}
+	emit.DownloadDone(n)
 	return dest, cleanup, exitOK
 }
 
 func noopCleanup() {}
+
+// resolveLang picks the UI language. If the CLI override is non-empty it
+// must match de|en|fr (case-insensitive). Empty falls back to env-based
+// detection. The boolean is false if the override was set but invalid, so
+// the caller can surface a clean error.
+func resolveLang(override string) (i18n.Lang, bool) {
+	if strings.TrimSpace(override) == "" {
+		return i18n.Detect(), true
+	}
+	return i18n.ParseLang(override)
+}
 
 // resolvePgDumpBinary returns the pg_dump binary to invoke. The conf-supplied
 // path wins; otherwise we fall back to a PATH lookup. Returns "" when neither

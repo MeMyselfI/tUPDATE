@@ -3,7 +3,9 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,7 +122,7 @@ func buildZip(t *testing.T, path string, entries map[string]string) {
 func TestRunApp_VersionFlag(t *testing.T) {
 	forceLocale(t, "en_US.UTF-8")
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, []string{"--version"}, "1.2.3")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, []string{"--version"}, "1.2.3")
 	if code != exitOK {
 		t.Errorf("exit = %d, want 0", code)
 	}
@@ -154,7 +156,7 @@ func TestRunApp_DryRunShowsDiff(t *testing.T) {
 		"--dry-run",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -199,7 +201,7 @@ func TestRunApp_ShowAllFlowPrintsDetailsThenContinues(t *testing.T) {
 		"--skip-service",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -239,7 +241,7 @@ func TestRunApp_ThreeWayAbortStopsBeforeApply(t *testing.T) {
 		"--skip-service",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitUserAbort {
 		t.Errorf("exit = %d, want exitUserAbort", code)
 	}
@@ -270,7 +272,7 @@ func TestRunApp_AppliesUpdateWithNoPrompt(t *testing.T) {
 		"--no-prompt",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -311,7 +313,7 @@ func TestRunApp_MissingZipReturnsConfigExit(t *testing.T) {
 		"--dry-run",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitConfig {
 		t.Errorf("exit = %d, want exitConfig=%d, stderr: %s", code, exitConfig, stderr.String())
 	}
@@ -327,7 +329,7 @@ func TestRunApp_MissingConfigReturnsConfigExit(t *testing.T) {
 		"--skip-service",
 		"--dry-run",
 	}
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitConfig {
 		t.Errorf("exit = %d, want exitConfig=%d", code, exitConfig)
 	}
@@ -353,7 +355,7 @@ func TestRunApp_NoChangesExitsZeroWithoutPrompt(t *testing.T) {
 		"--skip-service",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Errorf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -404,7 +406,7 @@ backup.directory = backup
 		"--no-prompt",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -448,7 +450,7 @@ func TestRunApp_SyncDirOnlyInZipGetsCreated(t *testing.T) {
 		"--no-prompt",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -489,7 +491,7 @@ func TestRunApp_LocalesUserVisibleStrings(t *testing.T) {
 				"--dry-run",
 			}
 			var stdout, stderr bytes.Buffer
-			code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+			code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 			if code != exitOK {
 				t.Fatalf("exit = %d, want 0", code)
 			}
@@ -517,7 +519,7 @@ func TestRunApp_ServiceStopFailNoPromptAborts(t *testing.T) {
 		"--no-prompt",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitServiceStop {
 		t.Errorf("exit = %d, want exitServiceStop=%d\nstderr: %s", code, exitServiceStop, stderr.String())
 	}
@@ -551,7 +553,7 @@ func TestRunApp_ServiceStopFailContinueRunsWorkflow(t *testing.T) {
 		"--app-root", live,
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -582,7 +584,7 @@ func TestRunApp_ServiceStopFailDeclineAborts(t *testing.T) {
 		"--app-root", live,
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitServiceStop {
 		t.Errorf("exit = %d, want exitServiceStop", code)
 	}
@@ -610,7 +612,7 @@ func TestRunApp_ServiceStartFailFinalDeclineReturnsStartExit(t *testing.T) {
 		"--app-root", live,
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitServiceStart {
 		t.Errorf("exit = %d, want exitServiceStart=%d\nstderr: %s", code, exitServiceStart, stderr.String())
 	}
@@ -640,7 +642,7 @@ func TestRunApp_UserDeclinesUpdate(t *testing.T) {
 		"--skip-service",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitUserAbort {
 		t.Errorf("exit = %d, want exitUserAbort=%d", code, exitUserAbort)
 	}
@@ -674,7 +676,7 @@ func TestRunApp_DBBackupPromptedIndependentlyAcceptsAndFailsGracefully(t *testin
 		"--skip-service",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -709,7 +711,7 @@ func TestRunApp_DBBackupDeclinedSkipsPgDump(t *testing.T) {
 		"--skip-service",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -763,7 +765,7 @@ backup.directory = backup
 		"--skip-service",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(stdin, &stdout, &stderr, args, "test")
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -791,7 +793,7 @@ func TestRunApp_NoBackupSkipsZipPromptAndZip(t *testing.T) {
 		"--no-files-backup",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -823,7 +825,7 @@ func TestRunApp_NoDBBackupSkipsPgDump(t *testing.T) {
 		"--no-db-backup",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -852,7 +854,7 @@ func TestRunApp_IgnoreServiceErrorsContinuesPastStopFail(t *testing.T) {
 		"--ignore-service-errors",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -885,7 +887,7 @@ func TestRunApp_IgnoreServiceErrorsContinuesPastStartFail(t *testing.T) {
 		"--ignore-service-errors",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitOK {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
@@ -910,7 +912,7 @@ func TestRunApp_NoPromptWithoutIgnoreStillAbortsOnStopFail(t *testing.T) {
 		"--no-prompt",
 	}
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
 	if code != exitServiceStop {
 		t.Errorf("exit = %d, want exitServiceStop", code)
 	}
@@ -919,7 +921,7 @@ func TestRunApp_NoPromptWithoutIgnoreStillAbortsOnStopFail(t *testing.T) {
 func TestRunApp_HelpGoesToStdoutAndReturnsOK(t *testing.T) {
 	forceLocale(t, "en_US.UTF-8")
 	var stdout, stderr bytes.Buffer
-	code := runApp(strings.NewReader(""), &stdout, &stderr, []string{"--help"}, "test")
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, []string{"--help"}, "test")
 	if code != exitOK {
 		t.Errorf("exit = %d, want exitOK", code)
 	}
@@ -928,5 +930,153 @@ func TestRunApp_HelpGoesToStdoutAndReturnsOK(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "USAGE") {
 		t.Errorf("--help leaked to stderr:\n%s", stderr.String())
+	}
+}
+
+func TestRunApp_JsonRequiresNoPrompt(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	var stdout, stderr, emit bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, &emit,
+		[]string{"--json"}, "test")
+	if code != exitConfig {
+		t.Errorf("exit = %d, want exitConfig", code)
+	}
+	if !strings.Contains(stderr.String(), "--json requires --no-prompt") {
+		t.Errorf("expected --json error in stderr:\n%s", stderr.String())
+	}
+}
+
+func TestRunApp_LangOverrideStrict(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	var stdout, stderr, emit bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, &emit,
+		[]string{"--lang=xx", "--version"}, "test")
+	if code != exitConfig {
+		t.Errorf("exit = %d, want exitConfig for invalid lang", code)
+	}
+	if !strings.Contains(stderr.String(), "--lang") {
+		t.Errorf("expected --lang error in stderr:\n%s", stderr.String())
+	}
+}
+
+func TestRunApp_LangOverrideAcceptsDeEnFr(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	for _, lang := range []string{"de", "en", "fr"} {
+		var stdout, stderr, emit bytes.Buffer
+		code := runApp(strings.NewReader(""), &stdout, &stderr, &emit,
+			[]string{"--lang", lang, "--version"}, "test")
+		if code != exitOK {
+			t.Errorf("--lang=%s: exit = %d, want exitOK\nstderr: %s", lang, code, stderr.String())
+		}
+	}
+}
+
+func TestRunApp_JsonModeProducesNDJSONOnEmitWriter(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	var stdout, stderr, emit bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, &emit,
+		[]string{
+			"--zip", zipPath,
+			"--config", confPath,
+			"--app-root", live,
+			"--skip-service",
+			"--no-prompt",
+			"--no-files-backup",
+			"--no-db-backup",
+			"--json",
+		}, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d\nstderr: %s\nemit: %s", code, stderr.String(), emit.String())
+	}
+	// stdout / stderr in JSON mode should be empty: humans are suppressed.
+	if stdout.Len() != 0 {
+		t.Errorf("--json: stdout not empty:\n%s", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("--json: stderr not empty:\n%s", stderr.String())
+	}
+
+	lines := strings.Split(strings.TrimRight(emit.String(), "\n"), "\n")
+	seen := map[string]bool{}
+	for _, line := range lines {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("invalid JSON line %q: %v", line, err)
+		}
+		seen[m["event"].(string)] = true
+	}
+	for _, want := range []string{"diff", "apply_ok", "exit"} {
+		if !seen[want] {
+			t.Errorf("expected %q event in JSON stream, got events: %v", want, seen)
+		}
+	}
+}
+
+func TestRunApp_DryRunChecksPassWhenLocalZipAndWritableBackup(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard,
+		[]string{
+			"--zip", zipPath,
+			"--config", confPath,
+			"--app-root", live,
+			"--skip-service",
+			"--dry-run",
+			"--no-db-backup", // skip pg_dump check (binary doesn't exist in tests)
+		}, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Check backup-dir writable: OK") {
+		t.Errorf("expected writable-OK in stderr:\n%s", stderr.String())
+	}
+}
+
+func TestRunApp_DryRunChecksFailExit9WhenBackupDirUnwritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("can't make dir unwritable as root")
+	}
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	// Force backup-dir creation to fail by creating a file at that path.
+	if err := os.WriteFile(filepath.Join(live, "backup"), []byte("blocker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard,
+		[]string{
+			"--zip", zipPath,
+			"--config", confPath,
+			"--app-root", live,
+			"--skip-service",
+			"--dry-run",
+			"--no-db-backup",
+		}, "test")
+	if code != exitDryRunCheck {
+		t.Errorf("exit = %d, want exitDryRunCheck (9)", code)
+	}
+	if !strings.Contains(stderr.String(), "FAIL") {
+		t.Errorf("expected FAIL marker in stderr:\n%s", stderr.String())
 	}
 }

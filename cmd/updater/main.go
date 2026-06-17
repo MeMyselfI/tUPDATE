@@ -11,15 +11,15 @@ import (
 	"time"
 
 	"updater/internal/i18n"
+	"updater/internal/machine"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=<value>".
 var version = "dev"
 
 func main() {
-	s := i18n.Get(i18n.Detect())
-
-	// Pre-parse to learn about --detach and --logfile before opening the log.
+	// Pre-parse to learn about --detach, --logfile, --json, --lang BEFORE
+	// opening the log or printing localized text.
 	f, err := parseFlags(os.Args[1:], os.Stdout, os.Stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -31,6 +31,13 @@ func main() {
 		fmt.Fprintf(os.Stdout, "tUPDATE %s\n", version)
 		os.Exit(0)
 	}
+
+	lang, ok := resolveLang(f.lang)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "--lang: invalid value %q, expected de|en|fr\n", f.lang)
+		os.Exit(1)
+	}
+	s := i18n.Get(lang)
 
 	if f.detach {
 		exitDetachParent(s, f)
@@ -44,17 +51,30 @@ func main() {
 	}
 	defer logFile.Close()
 
-	fmt.Fprintln(os.Stderr, s.BetaWarning)
-	fmt.Fprintln(os.Stderr, s.LogfileLabel, logPath)
-	fmt.Fprintf(logFile, s.StartedMarker+"\n", version, time.Now().Format(time.RFC3339))
-	fmt.Fprintln(logFile, s.BetaWarning)
+	var stdout, stderr, emitWriter io.Writer
+	if f.jsonOut {
+		// JSON-only mode: stdout + logfile receive ONLY NDJSON events.
+		// Localized human writes get sent to io.Discard so the writes that
+		// pepper runApp don't pollute the stream.
+		emitWriter = io.MultiWriter(os.Stdout, logFile)
+		stdout = io.Discard
+		stderr = io.Discard
+		machine.New(emitWriter, true).Ready(version, logPath)
+	} else {
+		fmt.Fprintln(os.Stderr, s.BetaWarning)
+		fmt.Fprintln(os.Stderr, s.LogfileLabel, logPath)
+		fmt.Fprintf(logFile, s.StartedMarker+"\n", version, time.Now().Format(time.RFC3339))
+		fmt.Fprintln(logFile, s.BetaWarning)
+		stdout = io.MultiWriter(os.Stdout, logFile)
+		stderr = io.MultiWriter(os.Stderr, logFile)
+		emitWriter = io.Discard
+	}
 
-	stdout := io.MultiWriter(os.Stdout, logFile)
-	stderr := io.MultiWriter(os.Stderr, logFile)
+	code := runApp(os.Stdin, stdout, stderr, emitWriter, os.Args[1:], version)
 
-	code := runApp(os.Stdin, stdout, stderr, os.Args[1:], version)
-
-	fmt.Fprintf(logFile, s.EndedMarker+"\n", code, time.Now().Format(time.RFC3339))
+	if !f.jsonOut {
+		fmt.Fprintf(logFile, s.EndedMarker+"\n", code, time.Now().Format(time.RFC3339))
+	}
 	os.Exit(code)
 }
 

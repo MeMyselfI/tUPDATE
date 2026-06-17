@@ -299,6 +299,22 @@ func Get(l Lang) Strings {
 	}
 }
 
+// ParseLang strictly maps "de" / "en" / "fr" to the matching Lang. An empty
+// input returns (LangEN, false) so the caller can decide whether to fall back
+// to env-based Detect. An unknown value returns (LangEN, false) and the caller
+// is expected to surface the error to the user.
+func ParseLang(s string) (Lang, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "de":
+		return LangDE, true
+	case "en":
+		return LangEN, true
+	case "fr":
+		return LangFR, true
+	}
+	return LangEN, false
+}
+
 // Detect inspects locale environment variables and returns the matching Lang.
 // Inspection order: LC_ALL, LC_MESSAGES, LANG. The first non-empty value's
 // two-letter ISO prefix decides the language. "C" / "POSIX" / unsupported

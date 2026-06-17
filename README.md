@@ -146,6 +146,8 @@ Kurzüberblick:
 | `--skip-service` | Service-Stop/-Start gar nicht aufrufen |
 | `--logfile <path>` | Logfile-Pfad selbst wählen (Default: `<TempDir>/updater-<ts>.log`) |
 | `--detach` | in den Hintergrund forken (setzt `--no-prompt` voraus) |
+| `--lang <de\|en\|fr>` | UI-Sprache erzwingen, überschreibt `LC_ALL` / `LC_MESSAGES` / `LANG` |
+| `--json` | NDJSON-Events auf stdout statt lokalisierter Ausgabe (setzt `--no-prompt` voraus) |
 | `--version` | Version + Build-Info |
 | `--help` | gruppierte Hilfe + Beispiele |
 
@@ -175,6 +177,62 @@ Updater detached, PID=12345, logfile=/var/log/myapp/updater.log
 Danach exit 0 — die JVM kann gefahrlos sterben. Der Updater läuft als eigenständiger Prozess weiter, stoppt den Service, synct, startet ihn neu, schreibt den kompletten Verlauf ins Logfile.
 
 `--detach` ist nur in Kombination mit `--no-prompt` zulässig; ohne stdin würde der Updater sonst stumm an einem unzugänglichen Prompt hängen.
+
+### Maschinenlesbare Ausgabe (--json)
+
+In `--json`-Modus werden auf stdout und im Logfile **ausschließlich** NDJSON-Events geschrieben (jede Zeile = eines JSON-Objekt). Es gibt **keine** lokalisierten Strings auf stdout/stderr — alle humanen Ausgaben werden in `io.Discard` umgeleitet. `--json` erzwingt `--no-prompt`, weil ohne stdin keine Rückfragen beantwortet werden könnten.
+
+Event-Schema (Auswahl):
+
+| event | wichtige Felder | wann |
+|-------|------------------|------|
+| `ready` | `version`, `logfile` | beim Start |
+| `download_start` / `download_done` / `download_failed` | `url`, `bytes`, `reason` | Download-Phase |
+| `extract_done` | `ref_root` | nach ZIP-Entpacken |
+| `diff` | `added`, `modified`, `removed`, `per_dir` | nach Diff-Berechnung |
+| `backup_files_ok` / `backup_files_failed` | `path`, `bytes`, `reason` | ZIP-Backup |
+| `backup_db_ok` / `backup_db_failed` / `backup_db_skipped` | `path`, `bytes`, `reason` | pg_dump |
+| `service_stop_ok` / `service_stop_failed` | `reason` | Service-Stop |
+| `service_start_ok` / `service_start_failed` | `reason` | Service-Start |
+| `apply_ok` / `apply_failed` | `reason` | nach Apply |
+| `dry_run_check` | `name`, `ok`, `detail` | jeder einzelne Pre-Flight-Check |
+| `detached` | `pid`, `logfile` | --detach-Parent vor Exit |
+| `fatal_error` | `stage`, `reason` | Nicht klassifizierter Abbruch |
+| `exit` | `code` | Letztes Event, immer vorhanden |
+
+Jedes Event trägt zusätzlich `ts` (RFC3339 UTC).
+
+Beispielausgabe (Java-Aufruf, `--no-files-backup --no-db-backup`):
+
+```json
+{"event":"ready","version":"0.7.0","logfile":"/var/log/u.log","ts":"2026-06-17T18:00:00Z"}
+{"event":"extract_done","ref_root":"/var/folders/.../updater-extract-123","ts":"..."}
+{"event":"diff","added":1,"modified":0,"removed":0,"per_dir":{"bin":{"added":1,"modified":0,"removed":0}},"ts":"..."}
+{"event":"apply_ok","ts":"..."}
+{"event":"exit","code":0,"ts":"..."}
+```
+
+### Pre-Flight-Checks (--dry-run)
+
+`--dry-run` führt jetzt drei Checks aus **ohne** Mutation:
+
+1. **Backup-Verzeichnis beschreibbar** — `<app-root>/<backup.directory>` wird ggf. angelegt, eine Probe-Datei geschrieben + gelöscht.
+2. **pg_dump-Binary verfügbar** — Reihenfolge: `pgdump.path.<os>` → `exec.LookPath("pg_dump")`. Mit `--no-db-backup` wird der Check übersprungen.
+3. **Download-URL erreichbar** — HTTP-`Range: bytes=0-1023`-Request gegen `download.url`; jeder 2xx-Status zählt als OK, der Body wird nicht gelesen, die Verbindung wird sofort geschlossen. Mit `--zip <pfad>` entfällt dieser Check.
+
+Ausgabe (Human-Modus):
+
+```
+Check backup-dir writable: OK (/opt/myapp/backup)
+Check pg_dump binary: OK (/opt/homebrew/opt/postgresql@16/bin/pg_dump)
+Check download URL: OK (HTTP 206 https://example.org/releases/app-latest.zip)
+```
+
+Im `--json`-Modus pro Check ein `{"event":"dry_run_check","name":"...","ok":true|false,"detail":"..."}`.
+
+Exit-Codes: **0** = alle Checks ok, **9** = mindestens ein Check fehlgeschlagen.
+
+Wird `--dry-run` mit `--zip` kombiniert, werden zusätzlich Extract + Diff ausgeführt (kein Service-Stop, kein Apply), damit der Operator „was würde sich ändern?" sieht.
 
 ### Vollautomatischer Lauf (CI / Cron)
 
@@ -340,6 +398,7 @@ Reihenfolge (last wins): Parent-Process-Env → Conf-Keys → `pgdump.args` (CLI
 | 5 | Sync fehlgeschlagen (Diff oder Apply) |
 | 6 | Service-Start fehlgeschlagen |
 | 7 | User-Abbruch via Prompt |
+| 9 | `--dry-run`-Pre-Flight-Check fehlgeschlagen (backup-dir / pg_dump / download.url) |
 
 ## Build
 
