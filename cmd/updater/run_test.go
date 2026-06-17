@@ -771,3 +771,147 @@ backup.directory = backup
 		t.Errorf("expected 'pg_dump not found' info in stderr:\n%s", stderr.String())
 	}
 }
+
+func TestRunApp_NoBackupSkipsZipPromptAndZip(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--skip-service",
+		"--no-prompt",
+		"--no-backup",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	backupDir := filepath.Join(live, "backup")
+	entries, _ := os.ReadDir(backupDir)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".zip") {
+			t.Errorf("--no-backup should skip ZIP, found: %s", e.Name())
+		}
+	}
+}
+
+func TestRunApp_NoDBBackupSkipsPgDump(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--skip-service",
+		"--no-prompt",
+		"--no-db-backup",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Running pg_dump") {
+		t.Errorf("--no-db-backup should skip pg_dump, stderr:\n%s", stderr.String())
+	}
+}
+
+func TestRunApp_IgnoreServiceErrorsContinuesPastStopFail(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	// stop fails, start succeeds.
+	confPath := writePropertiesWithSync(t, live, "bin", "false", "true")
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--no-prompt",
+		"--no-backup",
+		"--no-db-backup",
+		"--ignore-service-errors",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Service stop error:") {
+		t.Errorf("expected stop error still printed:\n%s", stderr.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "bin", "x"))
+	if string(got) != "v2" {
+		t.Errorf("update not applied despite --ignore-service-errors: %q", got)
+	}
+}
+
+func TestRunApp_IgnoreServiceErrorsContinuesPastStartFail(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	// stop succeeds, start fails.
+	confPath := writePropertiesWithSync(t, live, "bin", "true", "false")
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--no-prompt",
+		"--no-backup",
+		"--no-db-backup",
+		"--ignore-service-errors",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Service start error:") {
+		t.Errorf("expected start error still printed:\n%s", stderr.String())
+	}
+}
+
+func TestRunApp_NoPromptWithoutIgnoreStillAbortsOnStopFail(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writePropertiesWithSync(t, live, "bin", "false", "true")
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--no-prompt",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
+	if code != exitServiceStop {
+		t.Errorf("exit = %d, want exitServiceStop", code)
+	}
+}

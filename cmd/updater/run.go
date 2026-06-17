@@ -35,13 +35,16 @@ const (
 
 // flagSet holds parsed command-line options.
 type flagSet struct {
-	zipPath     string
-	configPath  string
-	appRoot     string
-	dryRun      bool
-	noPrompt    bool
-	skipService bool
-	showVersion bool
+	zipPath             string
+	configPath          string
+	appRoot             string
+	dryRun              bool
+	noPrompt            bool
+	skipService         bool
+	noBackup            bool
+	noDBBackup          bool
+	ignoreServiceErrors bool
+	showVersion         bool
 }
 
 // runApp executes the updater workflow.
@@ -129,14 +132,14 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		cancel()
 		if err != nil {
 			fmt.Fprintln(stderr, s.ServiceStopError, err)
-			// In automation mode (--no-prompt) we bail immediately.
-			// Interactively we ask the user whether to proceed without a stopped service.
-			cont, perr := promptContinue(prompter, f.noPrompt, s, stderr)
+			// --ignore-service-errors forces continue.
+			// Otherwise --no-prompt aborts and interactive mode asks.
+			cont, perr := promptContinue(prompter, f.noPrompt, f.ignoreServiceErrors, s, stderr)
 			if perr != nil || !cont {
 				return exitServiceStop
 			}
-			// User chose to continue — service was NOT stopped, so we must not
-			// try to "restart" it later.
+			// We're continuing despite the service NOT being stopped, so we
+			// must not try to "restart" it later.
 			serviceWasStopped = false
 		} else {
 			serviceWasStopped = true
@@ -177,11 +180,16 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		return exitUserAbort
 	}
 
-	wantBackup, err := prompter.Confirm(s.BackupQuestion, false)
-	if err != nil {
-		fmt.Fprintln(stderr, s.PromptError, err)
-		maybeStartService()
-		return exitUserAbort
+	var wantBackup bool
+	if f.noBackup {
+		wantBackup = false
+	} else {
+		wantBackup, err = prompter.Confirm(s.BackupQuestion, false)
+		if err != nil {
+			fmt.Fprintln(stderr, s.PromptError, err)
+			maybeStartService()
+			return exitUserAbort
+		}
 	}
 
 	backupTs := time.Now()
@@ -200,11 +208,16 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		fmt.Fprintln(stderr, s.BackupLabel, backupPath)
 	}
 
-	wantDBBackup, err := prompter.Confirm(s.DBBackupQuestion, false)
-	if err != nil {
-		fmt.Fprintln(stderr, s.PromptError, err)
-		maybeStartService()
-		return exitUserAbort
+	var wantDBBackup bool
+	if f.noDBBackup {
+		wantDBBackup = false
+	} else {
+		wantDBBackup, err = prompter.Confirm(s.DBBackupQuestion, false)
+		if err != nil {
+			fmt.Fprintln(stderr, s.PromptError, err)
+			maybeStartService()
+			return exitUserAbort
+		}
 	}
 	if wantDBBackup {
 		pgBin := resolvePgDumpBinary(cfg.PgdumpBinary(runtime.GOOS))
@@ -260,7 +273,7 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		cancel()
 		if err != nil {
 			fmt.Fprintln(stderr, s.ServiceStartError, err)
-			cont, perr := promptContinue(prompter, f.noPrompt, s, stderr)
+			cont, perr := promptContinue(prompter, f.noPrompt, f.ignoreServiceErrors, s, stderr)
 			if perr != nil || !cont {
 				return exitServiceStart
 			}
@@ -318,9 +331,17 @@ func runDiffReviewLoop(p prompt.Prompter, diffs []sync.DirDiff, s i18n.Strings, 
 }
 
 // promptContinue asks "Continue anyway?" when a service command fails.
-// In --no-prompt mode the answer is always "no" so automation aborts on
-// service failures instead of silently swallowing them.
-func promptContinue(p prompt.Prompter, noPrompt bool, s i18n.Strings, stderr io.Writer) (bool, error) {
+//
+//   - ignoreErrors: --ignore-service-errors forces continue without asking.
+//     The error message is still printed to stderr and the logfile before
+//     we get here, so the operator/CI run keeps the failure trail.
+//   - noPrompt: --no-prompt without --ignore-service-errors aborts so
+//     automation surfaces service problems instead of swallowing them.
+//   - otherwise: interactive y/N confirmation.
+func promptContinue(p prompt.Prompter, noPrompt, ignoreErrors bool, s i18n.Strings, stderr io.Writer) (bool, error) {
+	if ignoreErrors {
+		return true, nil
+	}
 	if noPrompt {
 		return false, nil
 	}
@@ -343,6 +364,9 @@ func parseFlags(args []string, stderr io.Writer) (*flagSet, error) {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "nur Diff anzeigen, nichts ändern / show diff only")
 	fs.BoolVar(&f.noPrompt, "no-prompt", false, "keine Rückfragen (Backup=ja, Update=ja, Service-Fehler=Abbruch)")
 	fs.BoolVar(&f.skipService, "skip-service", false, "Service nicht stoppen/starten / skip service stop/start")
+	fs.BoolVar(&f.noBackup, "no-backup", false, "ZIP-Backup ueberspringen (auch ohne Prompt) / skip ZIP backup")
+	fs.BoolVar(&f.noDBBackup, "no-db-backup", false, "DB-Backup (pg_dump) ueberspringen / skip DB backup")
+	fs.BoolVar(&f.ignoreServiceErrors, "ignore-service-errors", false, "bei Stop/Start-Fehler weitermachen / continue past service stop/start failures")
 	fs.BoolVar(&f.showVersion, "version", false, "Version anzeigen / show version")
 
 	if err := fs.Parse(args); err != nil {

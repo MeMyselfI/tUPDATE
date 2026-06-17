@@ -131,11 +131,29 @@ updater --zip <path>              lokale ZIP statt Download verwenden
 updater --config <path>           alternative Properties-Datei
 updater --app-root <path>         App-Root explizit setzen (überschreibt dirname-Logik)
 updater --dry-run                 nur Diff anzeigen, nichts verändern
-updater --no-prompt               keine Rückfragen, Default-Antwort wird genutzt (ja)
+updater --no-prompt               keine Rückfragen (Backup=ja, DB-Backup=ja, Update=ja,
+                                  Service-Fehler=Abbruch — modifizierbar mit den
+                                  --no-backup / --no-db-backup / --ignore-service-errors)
+updater --no-backup               ZIP-Backup-Schritt komplett überspringen (Prompt entfällt)
+updater --no-db-backup            DB-Backup-Schritt komplett überspringen (Prompt entfällt)
+updater --ignore-service-errors   Service-Stop/-Start-Fehler nur loggen, weiterlaufen
 updater --skip-service            Service-Stop/-Start auslassen
 updater --version                 Version + Build-Info
 updater --help                    Hilfe
 ```
+
+### Vollautomatischer Lauf (CI / Cron)
+
+```bash
+# Update einspielen, ohne Backups, Service-Fehler ignorieren, kein Prompt:
+updater --no-prompt \
+        --zip /tmp/release.zip \
+        --no-backup \
+        --no-db-backup \
+        --ignore-service-errors
+```
+
+Alle interaktiven Stellen sind via Flag steuerbar. `--ignore-service-errors` ändert nichts an der Konsolen-/Logfile-Ausgabe — die Fehlermeldung wird weiter gedruckt, nur die Rückfrage entfällt und der Lauf bricht nicht ab.
 
 ## Workflow
 
