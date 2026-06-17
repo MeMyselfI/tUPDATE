@@ -138,9 +138,39 @@ updater --no-backup               ZIP-Backup-Schritt komplett überspringen (Pro
 updater --no-db-backup            DB-Backup-Schritt komplett überspringen (Prompt entfällt)
 updater --ignore-service-errors   Service-Stop/-Start-Fehler nur loggen, weiterlaufen
 updater --skip-service            Service-Stop/-Start auslassen
+updater --logfile <path>          Logfile-Pfad selbst wählen (Default: <TempDir>/updater-<ts>.log)
+updater --detach                  in den Hintergrund forken; nur PID + Logfile-Pfad
+                                  auf stderr, Parent exit 0 (setzt --no-prompt voraus)
 updater --version                 Version + Build-Info
 updater --help                    Hilfe
 ```
+
+### Java / Service-Self-Update via --detach
+
+`--detach` re-execed sich selbst in eine eigene Session (Unix: `setsid`, Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`). Der re-execete Child hängt nicht mehr am Parent-Terminal / Service-Job-Object, überlebt also den Service-Stop, den er selbst auslöst. Stdin/Stdout/Stderr des Childs werden auf `/dev/null` (Unix) bzw. `nul` (Windows) verdrahtet — die komplette Ausgabe geht ins via `--logfile` festgelegte Logfile.
+
+```java
+// Java-Service, der sich selbst per tUPDATE aktualisiert:
+new ProcessBuilder(
+    "/opt/myapp/updater/updater",
+    "--detach",
+    "--no-prompt",
+    "--logfile", "/var/log/myapp/updater.log",
+    "--zip", "/tmp/release.zip",
+    "--ignore-service-errors"     // weil wir uns selbst gleich stoppen
+).inheritIO().start();
+// Sofort returnen, JVM darf der eigene Stop-Befehl gleich beenden.
+```
+
+Der Aufruf liefert auf stderr genau eine Zeile zurück:
+
+```
+Updater detached, PID=12345, logfile=/var/log/myapp/updater.log
+```
+
+Danach exit 0 — die JVM kann gefahrlos sterben. Der Updater läuft als eigenständiger Prozess weiter, stoppt den Service, synct, startet ihn neu, schreibt den kompletten Verlauf ins Logfile.
+
+`--detach` ist nur in Kombination mit `--no-prompt` zulässig; ohne stdin würde der Updater sonst stumm an einem unzugänglichen Prompt hängen.
 
 ### Vollautomatischer Lauf (CI / Cron)
 
@@ -234,11 +264,13 @@ Mit `--no-prompt` (Automation) entfällt die Rückfrage — Service-Fehler beend
 
 ## Logging
 
-Jeder Lauf erzeugt ein Logfile im OS-Temp-Verzeichnis:
+Default-Pfad pro OS (wenn `--logfile` nicht gesetzt ist):
 
 - Linux: `/tmp/updater-2026-06-16-17-25-01.log`
 - macOS: `/var/folders/.../T/updater-2026-06-16-17-25-01.log`
 - Windows: `%TEMP%\updater-2026-06-16-17-25-01.log`
+
+Mit `--logfile <pfad>` lässt sich ein beliebiger Pfad setzen. Relative Pfade werden gegen das aktuelle Arbeitsverzeichnis aufgelöst, fehlende Eltern-Ordner automatisch angelegt. Das Logfile wird bei jedem Lauf **truncated** — Rotation ist Sache des Operators.
 
 Das Log enthält Start-/End-Marker mit RFC3339-Zeitstempel und alle Konsolen-Ausgaben (stdout + stderr). Der Pfad wird beim Start auf der Konsole ausgegeben.
 

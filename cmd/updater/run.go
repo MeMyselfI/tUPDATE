@@ -38,12 +38,14 @@ type flagSet struct {
 	zipPath             string
 	configPath          string
 	appRoot             string
+	logfile             string
 	dryRun              bool
 	noPrompt            bool
 	skipService         bool
 	noBackup            bool
 	noDBBackup          bool
 	ignoreServiceErrors bool
+	detach              bool
 	showVersion         bool
 }
 
@@ -361,6 +363,8 @@ func parseFlags(args []string, stderr io.Writer) (*flagSet, error) {
 	fs.StringVar(&f.zipPath, "zip", "", "lokale ZIP statt Download nutzen / use a local ZIP instead of downloading")
 	fs.StringVar(&f.configPath, "config", "", "Pfad zu updater.properties (Default: <approot>/conf/updater.properties)")
 	fs.StringVar(&f.appRoot, "app-root", "", "App-Root überschreiben (Default: dirname(dirname(executable)))")
+	fs.StringVar(&f.logfile, "logfile", "", "Logfile-Pfad (Default: <TempDir>/updater-<ts>.log)")
+	fs.BoolVar(&f.detach, "detach", false, "in Hintergrund forken (impliziert --no-prompt) / detach into background")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "nur Diff anzeigen, nichts ändern / show diff only")
 	fs.BoolVar(&f.noPrompt, "no-prompt", false, "keine Rückfragen (Backup=ja, Update=ja, Service-Fehler=Abbruch)")
 	fs.BoolVar(&f.skipService, "skip-service", false, "Service nicht stoppen/starten / skip service stop/start")
