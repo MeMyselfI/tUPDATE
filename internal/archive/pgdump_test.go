@@ -11,30 +11,38 @@ import (
 	"time"
 )
 
-// fakePgDump writes a small shell or batch script that records its argv to
-// <recordPath> and either succeeds or fails depending on exitCode.
-// Returns the absolute path to the script.
-func fakePgDump(t *testing.T, recordPath string, exitCode int) string {
+// fakePgDumpRecording writes a small shell script that:
+//   * records argv to argvPath (when non-empty)
+//   * records the PG* env vars to envPath (when non-empty)
+//   * writes a dummy dump payload to the -f target
+//   * exits with the given code
+func fakePgDumpRecording(t *testing.T, argvPath, envPath string, exitCode int) string {
 	t.Helper()
 	dir := t.TempDir()
 	if runtime.GOOS == "windows" {
-		// Windows tests run rarely on this dev box, but keep the helper safe.
 		script := filepath.Join(dir, "pg_dump.bat")
-		body := "@echo off\r\n" +
-			"echo %* > \"" + recordPath + "\"\r\n" +
-			"exit /b " + itoa(exitCode) + "\r\n"
+		body := "@echo off\r\n"
+		if argvPath != "" {
+			body += "echo %* > \"" + argvPath + "\"\r\n"
+		}
+		if envPath != "" {
+			body += "set > \"" + envPath + "\"\r\n"
+		}
+		body += "exit /b " + itoa(exitCode) + "\r\n"
 		if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 			t.Fatalf("write fake pg_dump: %v", err)
 		}
 		return script
 	}
 	script := filepath.Join(dir, "pg_dump")
-	// Echo the entire arg list, including the -f <file> pair, so the test can
-	// assert ordering. Additionally, touch the output file the test expects so
-	// downstream readers don't fail on a missing file.
-	body := `#!/bin/sh
-echo "$@" > "` + recordPath + `"
-out=""
+	body := "#!/bin/sh\n"
+	if argvPath != "" {
+		body += `echo "$@" > "` + argvPath + `"` + "\n"
+	}
+	if envPath != "" {
+		body += `env | grep -E '^PG' > "` + envPath + `" 2>/dev/null || true` + "\n"
+	}
+	body += `out=""
 prev=""
 for a in "$@"; do
   if [ "$prev" = "-f" ]; then
@@ -80,12 +88,16 @@ func TestPgDumpPath_UsesSameFormatAsBackup(t *testing.T) {
 func TestRunPgDump_Success(t *testing.T) {
 	dir := t.TempDir()
 	recordPath := filepath.Join(dir, "argv.log")
-	bin := fakePgDump(t, recordPath, 0)
+	bin := fakePgDumpRecording(t, recordPath, "", 0)
 
 	outFile := filepath.Join(dir, "dump.backup")
 	var log bytes.Buffer
 
-	err := RunPgDump(context.Background(), bin, outFile, []string{"-h", "localhost", "mydb"}, &log)
+	err := RunPgDump(context.Background(), PgDumpOptions{
+		Binary:    bin,
+		OutFile:   outFile,
+		ExtraArgs: []string{"-h", "localhost", "mydb"},
+	}, &log)
 	if err != nil {
 		t.Fatalf("RunPgDump failed: %v", err)
 	}
@@ -111,12 +123,15 @@ func TestRunPgDump_Success(t *testing.T) {
 func TestRunPgDump_FailureRemovesOutput(t *testing.T) {
 	dir := t.TempDir()
 	recordPath := filepath.Join(dir, "argv.log")
-	bin := fakePgDump(t, recordPath, 1)
+	bin := fakePgDumpRecording(t, recordPath, "", 1)
 
 	outFile := filepath.Join(dir, "dump.backup")
 	var log bytes.Buffer
 
-	err := RunPgDump(context.Background(), bin, outFile, nil, &log)
+	err := RunPgDump(context.Background(), PgDumpOptions{
+		Binary:  bin,
+		OutFile: outFile,
+	}, &log)
 	if err == nil {
 		t.Fatal("expected RunPgDump to return an error on non-zero exit")
 	}
@@ -126,15 +141,101 @@ func TestRunPgDump_FailureRemovesOutput(t *testing.T) {
 }
 
 func TestRunPgDump_EmptyBinaryRejected(t *testing.T) {
-	err := RunPgDump(context.Background(), "", "/tmp/x", nil, nil)
+	err := RunPgDump(context.Background(), PgDumpOptions{Binary: "", OutFile: "/tmp/x"}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty binary path")
 	}
 }
 
 func TestRunPgDump_EmptyOutFileRejected(t *testing.T) {
-	err := RunPgDump(context.Background(), "/usr/bin/true", "", nil, nil)
+	err := RunPgDump(context.Background(), PgDumpOptions{Binary: "/usr/bin/true", OutFile: ""}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty output file path")
+	}
+}
+
+func TestRunPgDump_ExtraEnvInjected(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "env.log")
+	bin := fakePgDumpRecording(t, "", envPath, 0)
+
+	outFile := filepath.Join(dir, "dump.backup")
+	var log bytes.Buffer
+
+	err := RunPgDump(context.Background(), PgDumpOptions{
+		Binary:  bin,
+		OutFile: outFile,
+		ExtraEnv: []string{
+			"PGHOST=db.example.org",
+			"PGPORT=5433",
+			"PGUSER=alice",
+			"PGPASSWORD=s3cret",
+			"PGDATABASE=app",
+		},
+	}, &log)
+	if err != nil {
+		t.Fatalf("RunPgDump failed: %v", err)
+	}
+	envBytes, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read env log: %v", err)
+	}
+	env := string(envBytes)
+	for _, want := range []string{
+		"PGHOST=db.example.org",
+		"PGPORT=5433",
+		"PGUSER=alice",
+		"PGPASSWORD=s3cret",
+		"PGDATABASE=app",
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("env missing %q\nfull env:\n%s", want, env)
+		}
+	}
+}
+
+func TestRunPgDump_AutoNoPasswordWhenHasPassword(t *testing.T) {
+	dir := t.TempDir()
+	recordPath := filepath.Join(dir, "argv.log")
+	bin := fakePgDumpRecording(t, recordPath, "", 0)
+
+	outFile := filepath.Join(dir, "dump.backup")
+	var log bytes.Buffer
+
+	err := RunPgDump(context.Background(), PgDumpOptions{
+		Binary:      bin,
+		OutFile:     outFile,
+		HasPassword: true,
+	}, &log)
+	if err != nil {
+		t.Fatalf("RunPgDump failed: %v", err)
+	}
+	argv, _ := os.ReadFile(recordPath)
+	if !strings.Contains(string(argv), " -w ") && !strings.HasSuffix(strings.TrimSpace(string(argv)), " -w") {
+		t.Errorf("expected -w in argv when HasPassword=true, got %q", string(argv))
+	}
+}
+
+func TestRunPgDump_NoDuplicateW(t *testing.T) {
+	dir := t.TempDir()
+	recordPath := filepath.Join(dir, "argv.log")
+	bin := fakePgDumpRecording(t, recordPath, "", 0)
+
+	outFile := filepath.Join(dir, "dump.backup")
+	var log bytes.Buffer
+
+	err := RunPgDump(context.Background(), PgDumpOptions{
+		Binary:      bin,
+		OutFile:     outFile,
+		HasPassword: true,
+		ExtraArgs:   []string{"-w", "mydb"},
+	}, &log)
+	if err != nil {
+		t.Fatalf("RunPgDump failed: %v", err)
+	}
+	argv, _ := os.ReadFile(recordPath)
+	count := strings.Count(string(argv), "-w")
+	if count != 1 {
+		t.Errorf("expected exactly one -w, got %d in %q", count, string(argv))
 	}
 }

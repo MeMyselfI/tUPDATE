@@ -26,8 +26,13 @@ type Config struct {
 
 	BackupDirectory string
 
-	PgdumpPath map[string]string
-	PgdumpArgs []string
+	PgdumpPath     map[string]string
+	PgdumpArgs     []string
+	PgdumpHost     string
+	PgdumpPort     string
+	PgdumpUser     string
+	PgdumpPassword string
+	PgdumpDB       string
 }
 
 // supportedOS lists the runtime.GOOS values for which service commands must be configured.
@@ -104,6 +109,11 @@ func FromMap(props map[string]string) (*Config, error) {
 		cfg.PgdumpPath[os] = strings.TrimSpace(props["pgdump.path."+os])
 	}
 	cfg.PgdumpArgs = splitArgs(props["pgdump.args"])
+	cfg.PgdumpHost = strings.TrimSpace(props["pgdump.host"])
+	cfg.PgdumpPort = strings.TrimSpace(props["pgdump.port"])
+	cfg.PgdumpUser = strings.TrimSpace(props["pgdump.user"])
+	cfg.PgdumpPassword = strings.TrimSpace(props["pgdump.password"])
+	cfg.PgdumpDB = strings.TrimSpace(props["pgdump.db"])
 
 	return cfg, nil
 }

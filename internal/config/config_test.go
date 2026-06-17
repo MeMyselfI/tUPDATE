@@ -206,7 +206,12 @@ func TestFromMap_PgdumpConfigured(t *testing.T) {
 pgdump.path.windows = C:\pg\pg_dump.exe
 pgdump.path.darwin  = /usr/local/bin/pg_dump
 pgdump.path.linux   = /usr/bin/pg_dump
-pgdump.args = -h localhost -p 5432 -U postgres mydb
+pgdump.args = --schema=public
+pgdump.host = db.example.org
+pgdump.port = 5433
+pgdump.user = alice
+pgdump.password = s3cret
+pgdump.db = appdb
 `
 	cfg, err := loadFromString(t, conf)
 	if err != nil {
@@ -221,7 +226,7 @@ pgdump.args = -h localhost -p 5432 -U postgres mydb
 	if got := cfg.PgdumpBinary("windows"); got != `C:\pg\pg_dump.exe` {
 		t.Errorf("PgdumpBinary(windows) = %q", got)
 	}
-	want := []string{"-h", "localhost", "-p", "5432", "-U", "postgres", "mydb"}
+	want := []string{"--schema=public"}
 	if len(cfg.PgdumpArgs) != len(want) {
 		t.Fatalf("PgdumpArgs len = %d, want %d", len(cfg.PgdumpArgs), len(want))
 	}
@@ -229,6 +234,33 @@ pgdump.args = -h localhost -p 5432 -U postgres mydb
 		if cfg.PgdumpArgs[i] != a {
 			t.Errorf("PgdumpArgs[%d] = %q, want %q", i, cfg.PgdumpArgs[i], a)
 		}
+	}
+	if cfg.PgdumpHost != "db.example.org" {
+		t.Errorf("PgdumpHost = %q", cfg.PgdumpHost)
+	}
+	if cfg.PgdumpPort != "5433" {
+		t.Errorf("PgdumpPort = %q", cfg.PgdumpPort)
+	}
+	if cfg.PgdumpUser != "alice" {
+		t.Errorf("PgdumpUser = %q", cfg.PgdumpUser)
+	}
+	if cfg.PgdumpPassword != "s3cret" {
+		t.Errorf("PgdumpPassword = %q", cfg.PgdumpPassword)
+	}
+	if cfg.PgdumpDB != "appdb" {
+		t.Errorf("PgdumpDB = %q", cfg.PgdumpDB)
+	}
+}
+
+func TestFromMap_PgdumpConnEmptyByDefault(t *testing.T) {
+	cfg, err := loadFromString(t, validConf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.PgdumpHost != "" || cfg.PgdumpPort != "" || cfg.PgdumpUser != "" ||
+		cfg.PgdumpPassword != "" || cfg.PgdumpDB != "" {
+		t.Errorf("expected all pgdump conn fields empty, got host=%q port=%q user=%q pw=%q db=%q",
+			cfg.PgdumpHost, cfg.PgdumpPort, cfg.PgdumpUser, cfg.PgdumpPassword, cfg.PgdumpDB)
 	}
 }
 

@@ -214,7 +214,13 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 			dumpPath := archive.PgDumpPath(backupDir, backupTs)
 			fmt.Fprintln(stderr, s.DBBackupStarting)
 			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), archive.PgDumpTimeout)
-			err := archive.RunPgDump(dumpCtx, pgBin, dumpPath, cfg.PgdumpArgs, stderr)
+			err := archive.RunPgDump(dumpCtx, archive.PgDumpOptions{
+				Binary:      pgBin,
+				OutFile:     dumpPath,
+				ExtraArgs:   cfg.PgdumpArgs,
+				ExtraEnv:    buildPgDumpEnv(cfg),
+				HasPassword: cfg.PgdumpPassword != "",
+			}, stderr)
 			dumpCancel()
 			if err != nil {
 				fmt.Fprintln(stderr, s.DBBackupFailed, err)
@@ -421,4 +427,28 @@ func resolvePgDumpBinary(confPath string) string {
 		return p
 	}
 	return ""
+}
+
+// buildPgDumpEnv maps the pgdump.{host,port,user,password,db} conf keys to
+// their libpq equivalents and returns them as KEY=VAL strings ready to be
+// appended to os.Environ() inside RunPgDump. Empty values are skipped so the
+// parent process environment / .pgpass keep their precedence for unset keys.
+func buildPgDumpEnv(cfg *config.Config) []string {
+	var env []string
+	if cfg.PgdumpHost != "" {
+		env = append(env, "PGHOST="+cfg.PgdumpHost)
+	}
+	if cfg.PgdumpPort != "" {
+		env = append(env, "PGPORT="+cfg.PgdumpPort)
+	}
+	if cfg.PgdumpUser != "" {
+		env = append(env, "PGUSER="+cfg.PgdumpUser)
+	}
+	if cfg.PgdumpPassword != "" {
+		env = append(env, "PGPASSWORD="+cfg.PgdumpPassword)
+	}
+	if cfg.PgdumpDB != "" {
+		env = append(env, "PGDATABASE="+cfg.PgdumpDB)
+	}
+	return env
 }

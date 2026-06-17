@@ -100,7 +100,12 @@ backup.directory = backup
 #pgdump.path.windows = C:\Program Files\PostgreSQL\16\bin\pg_dump.exe
 #pgdump.path.darwin  = /opt/homebrew/opt/postgresql@16/bin/pg_dump
 #pgdump.path.linux   = /usr/bin/pg_dump
-#pgdump.args = -h localhost -p 5432 -U postgres mydb
+#pgdump.host     = localhost
+#pgdump.port     = 5432
+#pgdump.user     = postgres
+#pgdump.password = geheim
+#pgdump.db       = mydb
+#pgdump.args = --schema=public
 ```
 
 **Format-Regeln (einfach):**
@@ -245,8 +250,21 @@ Der DB-Backup-Prompt wird **immer** gestellt — unabhängig von der Antwort auf
 - Hartkodierter Timeout: 30 Minuten
 - Identischer Timestamp wie das ZIP-Backup (falls auch erstellt) → Paare bilden direkt zusammen
 - Stdout + Stderr des `pg_dump`-Prozesses werden ins Logfile gespiegelt
-- `pgdump.args` (optional) wird zusätzlich übergeben (`strings.Fields`-Splitting, keine Quoting-Unterstützung)
-- Connection-Parameter via `pgdump.args` ODER via libpq-Env (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `.pgpass`)
+- `pgdump.args` (optional) wird hinter `-Fc -f <out>` angehängt (`strings.Fields`-Splitting, keine Quoting-Unterstützung)
+
+**Connection-Parameter (3 Wege, kombinierbar):**
+
+| Conf-Key            | wird gesetzt als | Hinweis |
+|---------------------|------------------|---------|
+| `pgdump.host`       | `PGHOST`         |         |
+| `pgdump.port`       | `PGPORT`         | String, keine Validierung |
+| `pgdump.user`       | `PGUSER`         |         |
+| `pgdump.password`   | `PGPASSWORD`     | Klartext → Datei `chmod 600` schützen; **löst `-w`-Auto-Inject aus** |
+| `pgdump.db`         | `PGDATABASE`     |         |
+
+Reihenfolge (last wins): Parent-Process-Env → Conf-Keys → `pgdump.args` (CLI-Flags überschreiben Env). Wer kein Klartext-Passwort in der Properties-Datei haben möchte, lässt `pgdump.password` weg und benutzt `~/.pgpass` (`chmod 600`) oder eine vorher gesetzte `PGPASSWORD`-Env-Variable.
+
+**Auto-`-w`**: Sobald `pgdump.password` gesetzt ist, schiebt tUPDATE `-w` (= „nie nach Passwort fragen") direkt hinter `-Fc -f <out>` — sonst würde `pg_dump` interaktiv blockieren und in den Timeout laufen. Wer `-w` schon selbst in `pgdump.args` mitgibt, bekommt es nicht doppelt.
 
 **Binary-Lookup-Reihenfolge:**
 
