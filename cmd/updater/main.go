@@ -20,7 +20,7 @@ func main() {
 	s := i18n.Get(i18n.Detect())
 
 	// Pre-parse to learn about --detach and --logfile before opening the log.
-	f, err := parseFlags(os.Args[1:], os.Stderr)
+	f, err := parseFlags(os.Args[1:], os.Stdout, os.Stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)

@@ -42,7 +42,7 @@ type flagSet struct {
 	dryRun              bool
 	noPrompt            bool
 	skipService         bool
-	noBackup            bool
+	noFilesBackup       bool
 	noDBBackup          bool
 	ignoreServiceErrors bool
 	detach              bool
@@ -54,7 +54,7 @@ type flagSet struct {
 func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version string) int {
 	s := i18n.Get(i18n.Detect())
 
-	f, err := parseFlags(args, stderr)
+	f, err := parseFlags(args, stdout, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return exitOK
@@ -183,7 +183,7 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 	}
 
 	var wantBackup bool
-	if f.noBackup {
+	if f.noFilesBackup {
 		wantBackup = false
 	} else {
 		wantBackup, err = prompter.Confirm(s.BackupQuestion, false)
@@ -355,7 +355,7 @@ func promptContinue(p prompt.Prompter, noPrompt, ignoreErrors bool, s i18n.Strin
 	return cont, nil
 }
 
-func parseFlags(args []string, stderr io.Writer) (*flagSet, error) {
+func parseFlags(args []string, stdout, stderr io.Writer) (*flagSet, error) {
 	fs := flag.NewFlagSet("updater", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -368,15 +368,71 @@ func parseFlags(args []string, stderr io.Writer) (*flagSet, error) {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "nur Diff anzeigen, nichts ändern / show diff only")
 	fs.BoolVar(&f.noPrompt, "no-prompt", false, "keine Rückfragen (Backup=ja, Update=ja, Service-Fehler=Abbruch)")
 	fs.BoolVar(&f.skipService, "skip-service", false, "Service nicht stoppen/starten / skip service stop/start")
-	fs.BoolVar(&f.noBackup, "no-backup", false, "ZIP-Backup ueberspringen (auch ohne Prompt) / skip ZIP backup")
+	fs.BoolVar(&f.noFilesBackup, "no-files-backup", false, "ZIP-Backup ueberspringen / skip files (ZIP) backup")
 	fs.BoolVar(&f.noDBBackup, "no-db-backup", false, "DB-Backup (pg_dump) ueberspringen / skip DB backup")
 	fs.BoolVar(&f.ignoreServiceErrors, "ignore-service-errors", false, "bei Stop/Start-Fehler weitermachen / continue past service stop/start failures")
 	fs.BoolVar(&f.showVersion, "version", false, "Version anzeigen / show version")
+
+	fs.Usage = func() { writeHelp(stdout) }
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 	return f, nil
+}
+
+// writeHelp prints the grouped CLI reference + three example invocations to w.
+// Sections mix DE/EN to match the flag descriptions; section headers are EN-caps
+// so the structure is readable at a glance regardless of locale.
+func writeHelp(w io.Writer) {
+	const help = `tUPDATE - generic CLI updater for server / file-based installations.
+
+USAGE
+  updater [flags]
+
+INPUT / RUN MODE
+  --zip <path>             lokale ZIP statt Download / use a local ZIP
+  --config <path>          alternative properties-Datei (Default: <approot>/conf/updater.properties)
+  --app-root <path>        App-Root explizit setzen (Default: dirname(dirname(executable)))
+  --dry-run                nur Diff anzeigen, kein Apply / show diff only
+
+SERVICE
+  --skip-service           Service-Stop/-Start auslassen / skip service stop+start
+  --ignore-service-errors  bei Stop/Start-Fehler weitermachen statt abbrechen
+
+BACKUP
+  --no-files-backup        ZIP-Backup-Schritt komplett ueberspringen (Prompt entfaellt)
+  --no-db-backup           DB-Backup (pg_dump) komplett ueberspringen (Prompt entfaellt)
+
+INTERACTION
+  --no-prompt              keine Rueckfragen (Backup=ja, DB-Backup=ja, Update=ja,
+                           Service-Fehler=Abbruch -- modifizierbar via --no-files-backup,
+                           --no-db-backup, --ignore-service-errors)
+  --detach                 in den Hintergrund forken; nur PID + Logfile-Pfad
+                           auf stderr, Parent exit 0 (setzt --no-prompt voraus)
+
+LOGGING
+  --logfile <path>         eigener Logfile-Pfad (Default: <TempDir>/updater-<ts>.log)
+
+MISC
+  --version                Version anzeigen / show version
+  --help                   diese Hilfe / this help
+
+EXAMPLES
+  Default-Workflow (interaktiv, mit Prompts):
+    updater
+
+  CI / Automation, lokale ZIP, ohne Backups:
+    updater --no-prompt --zip /tmp/release.zip \
+            --no-files-backup --no-db-backup
+
+  Self-Update aus Java-Service (detached, eigenes Logfile):
+    updater --detach --no-prompt \
+            --logfile /var/log/myapp/updater.log \
+            --zip /tmp/release.zip \
+            --ignore-service-errors
+`
+	fmt.Fprint(w, help)
 }
 
 func resolveAppRoot(override string) (string, error) {

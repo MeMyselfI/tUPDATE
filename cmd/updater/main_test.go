@@ -85,7 +85,7 @@ func TestOpenLogFile_TruncatesExistingFile(t *testing.T) {
 }
 
 func TestBuildDetachChildArgs_StripsDetachInjectsLogfile(t *testing.T) {
-	in := []string{"--no-prompt", "--detach", "--zip", "/tmp/r.zip", "--no-backup"}
+	in := []string{"--no-prompt", "--detach", "--zip", "/tmp/r.zip", "--no-files-backup"}
 	out := buildDetachChildArgs(in, "/var/log/u.log")
 	for _, a := range out {
 		if a == "--detach" {
@@ -124,5 +124,33 @@ func TestBuildDetachChildArgs_HandlesEqualsForm(t *testing.T) {
 	}
 	if out[len(out)-2] != "--logfile" || out[len(out)-1] != "/right.log" {
 		t.Errorf("expected --logfile /right.log at end, got %v", out)
+	}
+}
+
+func TestWriteHelp_ContainsAllSectionsAndExamples(t *testing.T) {
+	var buf strings.Builder
+	writeHelp(&buf)
+	out := buf.String()
+
+	for _, want := range []string{
+		"USAGE",
+		"INPUT / RUN MODE",
+		"SERVICE",
+		"BACKUP",
+		"INTERACTION",
+		"LOGGING",
+		"MISC",
+		"EXAMPLES",
+		"--no-files-backup",
+		"--no-db-backup",
+		"--ignore-service-errors",
+		"--detach",
+		"--logfile",
+		"updater --no-prompt --zip /tmp/release.zip",
+		"--detach --no-prompt",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help output missing %q\n--- full ---\n%s", want, out)
+		}
 	}
 }

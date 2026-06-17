@@ -125,25 +125,29 @@ backup.directory = backup
 
 ## CLI-Flags
 
+Vollständige, gruppierte Referenz mit Beispielen liefert das Tool selbst:
+
+```bash
+./updater/updater --help
 ```
-updater                           Default-Workflow (Download + Diff + Prompts + Apply)
-updater --zip <path>              lokale ZIP statt Download verwenden
-updater --config <path>           alternative Properties-Datei
-updater --app-root <path>         App-Root explizit setzen (überschreibt dirname-Logik)
-updater --dry-run                 nur Diff anzeigen, nichts verändern
-updater --no-prompt               keine Rückfragen (Backup=ja, DB-Backup=ja, Update=ja,
-                                  Service-Fehler=Abbruch — modifizierbar mit den
-                                  --no-backup / --no-db-backup / --ignore-service-errors)
-updater --no-backup               ZIP-Backup-Schritt komplett überspringen (Prompt entfällt)
-updater --no-db-backup            DB-Backup-Schritt komplett überspringen (Prompt entfällt)
-updater --ignore-service-errors   Service-Stop/-Start-Fehler nur loggen, weiterlaufen
-updater --skip-service            Service-Stop/-Start auslassen
-updater --logfile <path>          Logfile-Pfad selbst wählen (Default: <TempDir>/updater-<ts>.log)
-updater --detach                  in den Hintergrund forken; nur PID + Logfile-Pfad
-                                  auf stderr, Parent exit 0 (setzt --no-prompt voraus)
-updater --version                 Version + Build-Info
-updater --help                    Hilfe
-```
+
+Kurzüberblick:
+
+| Flag | Wirkung |
+|------|---------|
+| `--zip <path>` | lokale ZIP statt Download |
+| `--config <path>` | alternative Properties-Datei |
+| `--app-root <path>` | App-Root explizit setzen |
+| `--dry-run` | nur Diff anzeigen, kein Apply |
+| `--no-prompt` | keine Rückfragen (Backup=ja, DB-Backup=ja, Update=ja, Service-Fehler=Abbruch) |
+| `--no-files-backup` | ZIP-Backup-Schritt komplett überspringen |
+| `--no-db-backup` | DB-Backup-Schritt komplett überspringen |
+| `--ignore-service-errors` | Service-Stop/-Start-Fehler nur loggen, weiterlaufen |
+| `--skip-service` | Service-Stop/-Start gar nicht aufrufen |
+| `--logfile <path>` | Logfile-Pfad selbst wählen (Default: `<TempDir>/updater-<ts>.log`) |
+| `--detach` | in den Hintergrund forken (setzt `--no-prompt` voraus) |
+| `--version` | Version + Build-Info |
+| `--help` | gruppierte Hilfe + Beispiele |
 
 ### Java / Service-Self-Update via --detach
 
@@ -178,7 +182,7 @@ Danach exit 0 — die JVM kann gefahrlos sterben. Der Updater läuft als eigenst
 # Update einspielen, ohne Backups, Service-Fehler ignorieren, kein Prompt:
 updater --no-prompt \
         --zip /tmp/release.zip \
-        --no-backup \
+        --no-files-backup \
         --no-db-backup \
         --ignore-service-errors
 ```

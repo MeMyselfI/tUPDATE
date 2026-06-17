@@ -788,7 +788,7 @@ func TestRunApp_NoBackupSkipsZipPromptAndZip(t *testing.T) {
 		"--app-root", live,
 		"--skip-service",
 		"--no-prompt",
-		"--no-backup",
+		"--no-files-backup",
 	}
 	var stdout, stderr bytes.Buffer
 	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
@@ -799,7 +799,7 @@ func TestRunApp_NoBackupSkipsZipPromptAndZip(t *testing.T) {
 	entries, _ := os.ReadDir(backupDir)
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".zip") {
-			t.Errorf("--no-backup should skip ZIP, found: %s", e.Name())
+			t.Errorf("--no-files-backup should skip ZIP, found: %s", e.Name())
 		}
 	}
 }
@@ -847,7 +847,7 @@ func TestRunApp_IgnoreServiceErrorsContinuesPastStopFail(t *testing.T) {
 		"--config", confPath,
 		"--app-root", live,
 		"--no-prompt",
-		"--no-backup",
+		"--no-files-backup",
 		"--no-db-backup",
 		"--ignore-service-errors",
 	}
@@ -880,7 +880,7 @@ func TestRunApp_IgnoreServiceErrorsContinuesPastStartFail(t *testing.T) {
 		"--config", confPath,
 		"--app-root", live,
 		"--no-prompt",
-		"--no-backup",
+		"--no-files-backup",
 		"--no-db-backup",
 		"--ignore-service-errors",
 	}
@@ -913,5 +913,20 @@ func TestRunApp_NoPromptWithoutIgnoreStillAbortsOnStopFail(t *testing.T) {
 	code := runApp(strings.NewReader(""), &stdout, &stderr, args, "test")
 	if code != exitServiceStop {
 		t.Errorf("exit = %d, want exitServiceStop", code)
+	}
+}
+
+func TestRunApp_HelpGoesToStdoutAndReturnsOK(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	var stdout, stderr bytes.Buffer
+	code := runApp(strings.NewReader(""), &stdout, &stderr, []string{"--help"}, "test")
+	if code != exitOK {
+		t.Errorf("exit = %d, want exitOK", code)
+	}
+	if !strings.Contains(stdout.String(), "USAGE") {
+		t.Errorf("--help output not on stdout; stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
+	if strings.Contains(stderr.String(), "USAGE") {
+		t.Errorf("--help leaked to stderr:\n%s", stderr.String())
 	}
 }
