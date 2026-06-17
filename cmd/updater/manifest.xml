@@ -3,9 +3,9 @@
   <assemblyIdentity
       version="0.1.0.0"
       processorArchitecture="*"
-      name="org.ucan.tosce.Updater"
+      name="org.tupdate.Updater"
       type="win32"/>
-  <description>tOSCE-Server Updater</description>
+  <description>tUPDATE - generic CLI updater</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges>

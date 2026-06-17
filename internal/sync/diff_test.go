@@ -194,7 +194,7 @@ func TestResolveRefRoot_DirectLayoutUnchanged(t *testing.T) {
 
 func TestResolveRefRoot_StripsSingleWrapperFolder(t *testing.T) {
 	tmp := t.TempDir()
-	wrapper := filepath.Join(tmp, "tOSCE-Server")
+	wrapper := filepath.Join(tmp, "wrapped-app")
 	if err := os.MkdirAll(filepath.Join(wrapper, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestResolveRefRoot_StripsSingleWrapperFolder(t *testing.T) {
 
 func TestResolveRefRoot_IgnoresMACOSXSibling(t *testing.T) {
 	tmp := t.TempDir()
-	wrapper := filepath.Join(tmp, "tOSCE-Server")
+	wrapper := filepath.Join(tmp, "wrapped-app")
 	if err := os.MkdirAll(filepath.Join(wrapper, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}

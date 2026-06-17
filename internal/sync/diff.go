@@ -62,7 +62,7 @@ func (d *DirDiff) Counts() (add, mod, rem int) {
 
 // ResolveRefRoot returns the directory inside extractedDir that should be
 // treated as the reference root for diffing. It strips a single top-level
-// wrapper folder (e.g. "tOSCE-Server/") when the configured sync.directories
+// wrapper folder (e.g. "app-1.2.3/") when the configured sync.directories
 // are not present directly inside extractedDir but live one level deeper
 // under exactly one sub-directory.
 //

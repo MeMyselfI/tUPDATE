@@ -186,6 +186,52 @@ func TestLoad_FromSampleFile(t *testing.T) {
 	}
 }
 
+func TestFromMap_PgdumpOptional(t *testing.T) {
+	cfg, err := loadFromString(t, validConf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, os := range []string{"windows", "darwin", "linux"} {
+		if cfg.PgdumpBinary(os) != "" {
+			t.Errorf("PgdumpBinary(%s) should be empty, got %q", os, cfg.PgdumpBinary(os))
+		}
+	}
+	if len(cfg.PgdumpArgs) != 0 {
+		t.Errorf("PgdumpArgs should be empty, got %v", cfg.PgdumpArgs)
+	}
+}
+
+func TestFromMap_PgdumpConfigured(t *testing.T) {
+	conf := validConf + `
+pgdump.path.windows = C:\pg\pg_dump.exe
+pgdump.path.darwin  = /usr/local/bin/pg_dump
+pgdump.path.linux   = /usr/bin/pg_dump
+pgdump.args = -h localhost -p 5432 -U postgres mydb
+`
+	cfg, err := loadFromString(t, conf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.PgdumpBinary("linux"); got != "/usr/bin/pg_dump" {
+		t.Errorf("PgdumpBinary(linux) = %q", got)
+	}
+	if got := cfg.PgdumpBinary("darwin"); got != "/usr/local/bin/pg_dump" {
+		t.Errorf("PgdumpBinary(darwin) = %q", got)
+	}
+	if got := cfg.PgdumpBinary("windows"); got != `C:\pg\pg_dump.exe` {
+		t.Errorf("PgdumpBinary(windows) = %q", got)
+	}
+	want := []string{"-h", "localhost", "-p", "5432", "-U", "postgres", "mydb"}
+	if len(cfg.PgdumpArgs) != len(want) {
+		t.Fatalf("PgdumpArgs len = %d, want %d", len(cfg.PgdumpArgs), len(want))
+	}
+	for i, a := range want {
+		if cfg.PgdumpArgs[i] != a {
+			t.Errorf("PgdumpArgs[%d] = %q, want %q", i, cfg.PgdumpArgs[i], a)
+		}
+	}
+}
+
 func TestServiceCommandForOS(t *testing.T) {
 	cfg, err := loadFromString(t, validConf)
 	if err != nil {

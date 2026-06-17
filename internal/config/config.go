@@ -25,6 +25,9 @@ type Config struct {
 	ServiceStartTimeoutSecs int
 
 	BackupDirectory string
+
+	PgdumpPath map[string]string
+	PgdumpArgs []string
 }
 
 // supportedOS lists the runtime.GOOS values for which service commands must be configured.
@@ -44,6 +47,7 @@ func FromMap(props map[string]string) (*Config, error) {
 	cfg := &Config{
 		ServiceStop:  make(map[string]string, len(supportedOS)),
 		ServiceStart: make(map[string]string, len(supportedOS)),
+		PgdumpPath:   make(map[string]string, len(supportedOS)),
 	}
 
 	var err error
@@ -96,7 +100,27 @@ func FromMap(props map[string]string) (*Config, error) {
 		return nil, err
 	}
 
+	for _, os := range supportedOS {
+		cfg.PgdumpPath[os] = strings.TrimSpace(props["pgdump.path."+os])
+	}
+	cfg.PgdumpArgs = splitArgs(props["pgdump.args"])
+
 	return cfg, nil
+}
+
+// PgdumpBinary returns the pg_dump binary path for the given GOOS, or "" if unconfigured.
+func (c *Config) PgdumpBinary(goos string) string {
+	return c.PgdumpPath[goos]
+}
+
+// splitArgs splits a single-line space-separated args string into fields.
+// Quoting / escaping is not supported - values must not contain spaces.
+func splitArgs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	return strings.Fields(raw)
 }
 
 // StopCommand returns the stop command for the given GOOS, or "" if unconfigured.

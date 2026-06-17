@@ -12,7 +12,7 @@ import (
 )
 
 func TestDownload_Success(t *testing.T) {
-	payload := bytes.Repeat([]byte("xExam-Update-Data!"), 10000) // ~180 KB
+	payload := bytes.Repeat([]byte("Update-Data!"), 15000) // ~180 KB
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "180000")

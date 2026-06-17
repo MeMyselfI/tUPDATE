@@ -51,7 +51,11 @@ service.start.linux = %s
 service.stop.timeout.seconds = 10
 service.start.timeout.seconds = 10
 backup.directory = backup
-`, syncDirs, stopCmd, stopCmd, stopCmd, startCmd, startCmd, startCmd)
+pgdump.path.windows = %s
+pgdump.path.darwin  = %s
+pgdump.path.linux   = %s
+`, syncDirs, stopCmd, stopCmd, stopCmd, startCmd, startCmd, startCmd,
+		nonexistentPgDump, nonexistentPgDump, nonexistentPgDump)
 	writeFile(t, conf, body)
 	return conf
 }
@@ -75,10 +79,18 @@ service.start.linux = true
 service.stop.timeout.seconds = 10
 service.start.timeout.seconds = 10
 backup.directory = backup
+pgdump.path.windows = ` + nonexistentPgDump + `
+pgdump.path.darwin  = ` + nonexistentPgDump + `
+pgdump.path.linux   = ` + nonexistentPgDump + `
 `
 	writeFile(t, conf, body)
 	return conf
 }
+
+// nonexistentPgDump deterministically routes the DB-backup branch in tests
+// to a failing exec without falling through to the host's PATH (which may or
+// may not have a real pg_dump installed).
+const nonexistentPgDump = "/tmp/this-pgdump-does-not-exist-tupdate-test"
 
 func buildZip(t *testing.T, path string, entries map[string]string) {
 	t.Helper()
@@ -178,8 +190,8 @@ func TestRunApp_ShowAllFlowPrintsDetailsThenContinues(t *testing.T) {
 	writeFile(t, filepath.Join(live, "www", "index.html"), "<html>v1</html>")
 	writeFile(t, filepath.Join(live, "www", "stale.html"), "<html>old</html>")
 
-	// Answers: 3-way=a (show), continue-after-details=y, backup=n, update=y
-	stdin := strings.NewReader("a\ny\nn\ny\n")
+	// Answers: 3-way=a (show), continue-after-details=y, backup=n, dbbackup=n, update=y
+	stdin := strings.NewReader("a\ny\nn\nn\ny\n")
 	args := []string{
 		"--zip", zipPath,
 		"--config", confPath,
@@ -529,8 +541,9 @@ func TestRunApp_ServiceStopFailContinueRunsWorkflow(t *testing.T) {
 	//   "Continue anyway?"              → y   (after stop fail)
 	//   "Continue/abort/show?"          → y
 	//   "Create backup?"                → n
+	//   "DB-backup via pg_dump?"        → n
 	//   "Apply update now?"             → y
-	stdin := strings.NewReader("y\ny\nn\ny\n")
+	stdin := strings.NewReader("y\ny\nn\nn\ny\n")
 
 	args := []string{
 		"--zip", zipPath,
@@ -589,8 +602,8 @@ func TestRunApp_ServiceStartFailFinalDeclineReturnsStartExit(t *testing.T) {
 	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
 	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
 
-	// ContinueOrShow=y, Backup=n, Update=y, ContinueAnywayAfterStartFail=n.
-	stdin := strings.NewReader("y\nn\ny\nn\n")
+	// ContinueOrShow=y, Backup=n, DBBackup=n, Update=y, ContinueAnywayAfterStartFail=n.
+	stdin := strings.NewReader("y\nn\nn\ny\nn\n")
 	args := []string{
 		"--zip", zipPath,
 		"--config", confPath,
@@ -637,5 +650,124 @@ func TestRunApp_UserDeclinesUpdate(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(live, "bin", "new.sh")); err == nil {
 		t.Errorf("bin/new.sh created despite user declining")
+	}
+}
+
+func TestRunApp_DBBackupPromptedIndependentlyAcceptsAndFailsGracefully(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	// 3-way=y, backup=n, dbbackup=y, update=y.
+	// pgdump.path points at a nonexistent binary -> RunPgDump errors but the
+	// workflow must continue and exit 0.
+	stdin := strings.NewReader("y\nn\ny\ny\n")
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--skip-service",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "pg_dump") {
+		t.Errorf("expected DB-Backup prompt to mention pg_dump:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "pg_dump failed:") {
+		t.Errorf("expected pg_dump failure message in stderr:\n%s", stderr.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "bin", "run.sh"))
+	if string(got) != "v2" {
+		t.Errorf("update was not applied despite pg_dump failure: %q", got)
+	}
+}
+
+func TestRunApp_DBBackupDeclinedSkipsPgDump(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	// 3-way=y, backup=n, dbbackup=n, update=y.
+	stdin := strings.NewReader("y\nn\nn\ny\n")
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--skip-service",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Running pg_dump") {
+		t.Errorf("pg_dump should not run when user declines, stderr:\n%s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "pg_dump failed") {
+		t.Errorf("pg_dump should not run when user declines, stderr:\n%s", stderr.String())
+	}
+}
+
+func TestRunApp_DBBackupAcceptedNoBinaryConfiguredShowsSkippedMessage(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	// Write conf WITHOUT any pgdump.path entries.
+	confPath := filepath.Join(live, "conf", "updater.properties")
+	body := `download.url = http://127.0.0.1:1/x.zip
+download.timeout.seconds = 30
+proxy.url =
+proxy.user =
+proxy.password =
+proxy.no_proxy =
+sync.directories = bin
+service.stop.windows = exit 0
+service.stop.darwin = true
+service.stop.linux = true
+service.start.windows = exit 0
+service.start.darwin = true
+service.start.linux = true
+service.stop.timeout.seconds = 10
+service.start.timeout.seconds = 10
+backup.directory = backup
+`
+	writeFile(t, confPath, body)
+
+	// Wipe PATH so exec.LookPath cannot find a real pg_dump and we hit the
+	// "not found" branch deterministically.
+	t.Setenv("PATH", "")
+
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "v1")
+
+	// 3-way=y, backup=n, dbbackup=y, update=y.
+	stdin := strings.NewReader("y\nn\ny\ny\n")
+	args := []string{
+		"--zip", zipPath,
+		"--config", confPath,
+		"--app-root", live,
+		"--skip-service",
+	}
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "not found") {
+		t.Errorf("expected 'pg_dump not found' info in stderr:\n%s", stderr.String())
 	}
 }

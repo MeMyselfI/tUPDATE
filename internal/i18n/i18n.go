@@ -82,6 +82,11 @@ type Strings struct {
 	LegendAdded                  string // "[+] added"
 	LegendModified               string // "[~] modified"
 	LegendRemoved                string // "[-] removed"
+	DBBackupQuestion             string // "Create database dump via pg_dump?"
+	DBBackupStarting             string // "Running pg_dump..."
+	DBBackupDone                 string // "DB-Backup:"
+	DBBackupFailed               string // "pg_dump failed:"
+	DBBackupSkipped              string // "pg_dump not found, skipping DB backup."
 	ApplyingUpdate               string
 	SyncError                    string
 	RestoreFromBackup            string
@@ -140,6 +145,11 @@ var en = Strings{
 	LegendAdded:                  "[+] added",
 	LegendModified:               "[~] overwritten",
 	LegendRemoved:                "[-] removed",
+	DBBackupQuestion:             "Create database dump via pg_dump?",
+	DBBackupStarting:             "Running pg_dump...",
+	DBBackupDone:                 "DB-Backup:",
+	DBBackupFailed:               "pg_dump failed:",
+	DBBackupSkipped:              "pg_dump not found, skipping DB backup.",
 	ApplyingUpdate:               "Applying update...",
 	SyncError:                    "Sync error:",
 	RestoreFromBackup:            "Backup available for restore:",
@@ -197,6 +207,11 @@ var de = Strings{
 	LegendAdded:                  "[+] neu",
 	LegendModified:               "[~] überschrieben",
 	LegendRemoved:                "[-] gelöscht",
+	DBBackupQuestion:             "Datenbank-Dump via pg_dump erstellen?",
+	DBBackupStarting:             "pg_dump wird ausgeführt...",
+	DBBackupDone:                 "DB-Backup:",
+	DBBackupFailed:               "pg_dump fehlgeschlagen:",
+	DBBackupSkipped:              "pg_dump nicht gefunden, DB-Backup übersprungen.",
 	ApplyingUpdate:               "Update wird angewendet...",
 	SyncError:                    "Sync-Fehler:",
 	RestoreFromBackup:            "Backup zum Wiederherstellen:",
@@ -254,6 +269,11 @@ var fr = Strings{
 	LegendAdded:                  "[+] ajouté",
 	LegendModified:               "[~] écrasé",
 	LegendRemoved:                "[-] supprimé",
+	DBBackupQuestion:             "Créer une sauvegarde de la base via pg_dump ?",
+	DBBackupStarting:             "Exécution de pg_dump...",
+	DBBackupDone:                 "Sauvegarde BD :",
+	DBBackupFailed:               "Échec de pg_dump :",
+	DBBackupSkipped:              "pg_dump introuvable, sauvegarde BD ignorée.",
 	ApplyingUpdate:               "Application de la mise à jour...",
 	SyncError:                    "Erreur de synchronisation :",
 	RestoreFromBackup:            "Sauvegarde disponible pour restauration :",

@@ -19,16 +19,16 @@
     "FileSubType": "00"
   },
   "StringFileInfo": {
-    "Comments": "tOSCE-Server Updater (Go-CLI)",
-    "CompanyName": "ucan-assess",
-    "FileDescription": "tOSCE-Server Updater",
+    "Comments": "tUPDATE - generic CLI updater (Go)",
+    "CompanyName": "tUPDATE",
+    "FileDescription": "tUPDATE - generic CLI updater",
     "FileVersion": "0.1.0.0",
     "InternalName": "updater.exe",
-    "LegalCopyright": "ucan-assess",
+    "LegalCopyright": "tUPDATE",
     "LegalTrademarks": "",
     "OriginalFilename": "updater.exe",
     "PrivateBuild": "",
-    "ProductName": "tOSCE-Updater",
+    "ProductName": "tUPDATE",
     "ProductVersion": "0.1.0.0",
     "SpecialBuild": ""
   },

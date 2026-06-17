@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -183,11 +184,13 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		return exitUserAbort
 	}
 
+	backupTs := time.Now()
+	backupDir := filepath.Join(appRoot, cfg.BackupDirectory)
+
 	var backupPath string
 	if wantBackup {
 		fmt.Fprintln(stderr, s.BackupCreating)
-		backupDir := filepath.Join(appRoot, cfg.BackupDirectory)
-		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, time.Now())
+		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, backupTs)
 		if err != nil {
 			fmt.Fprintln(stderr, s.BackupError, err)
 			maybeStartService()
@@ -195,6 +198,30 @@ func runApp(stdin io.Reader, stdout, stderr io.Writer, args []string, version st
 		}
 		backupPath = p
 		fmt.Fprintln(stderr, s.BackupLabel, backupPath)
+	}
+
+	wantDBBackup, err := prompter.Confirm(s.DBBackupQuestion, false)
+	if err != nil {
+		fmt.Fprintln(stderr, s.PromptError, err)
+		maybeStartService()
+		return exitUserAbort
+	}
+	if wantDBBackup {
+		pgBin := resolvePgDumpBinary(cfg.PgdumpBinary(runtime.GOOS))
+		if pgBin == "" {
+			fmt.Fprintln(stderr, s.DBBackupSkipped)
+		} else {
+			dumpPath := archive.PgDumpPath(backupDir, backupTs)
+			fmt.Fprintln(stderr, s.DBBackupStarting)
+			dumpCtx, dumpCancel := context.WithTimeout(context.Background(), archive.PgDumpTimeout)
+			err := archive.RunPgDump(dumpCtx, pgBin, dumpPath, cfg.PgdumpArgs, stderr)
+			dumpCancel()
+			if err != nil {
+				fmt.Fprintln(stderr, s.DBBackupFailed, err)
+			} else {
+				fmt.Fprintln(stderr, s.DBBackupDone, dumpPath)
+			}
+		}
 	}
 
 	wantUpdate, err := prompter.Confirm(s.UpdateQuestion, false)
@@ -382,3 +409,16 @@ func acquireZip(f *flagSet, cfg *config.Config, stderr io.Writer, s i18n.Strings
 }
 
 func noopCleanup() {}
+
+// resolvePgDumpBinary returns the pg_dump binary to invoke. The conf-supplied
+// path wins; otherwise we fall back to a PATH lookup. Returns "" when neither
+// resolves so the caller can print the "skipped" message and continue.
+func resolvePgDumpBinary(confPath string) string {
+	if confPath != "" {
+		return confPath
+	}
+	if p, err := exec.LookPath("pg_dump"); err == nil {
+		return p
+	}
+	return ""
+}

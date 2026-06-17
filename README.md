@@ -2,7 +2,7 @@
 
 > **⚠️ BETA**: Dieses Tool befindet sich aktuell in der Beta-Phase. Bitte vor jedem Einsatz ein Backup erstellen lassen und das Verhalten in einer Test-Installation prüfen, bevor produktive Server damit angefasst werden. Beim Start erscheint ein lokalisierter Warnhinweis.
 
-Plattformübergreifender CLI-Updater für die Java-basierte tOSCE-Server-Anwendung. Lädt eine ZIP mit der aktuellen Server-Version aus dem Netz oder von einer lokalen Quelle, vergleicht den Inhalt mit der laufenden Installation, fragt vor jeder destruktiven Aktion nach und synchronisiert anschließend die konfigurierten Verzeichnisse. UI-Sprache wird aus der OS-Locale (`LC_ALL` / `LC_MESSAGES` / `LANG`) gezogen — unterstützt Deutsch, Englisch und Französisch.
+Plattformübergreifender, generischer CLI-Updater für server- oder dateibasierte Anwendungen. Lädt eine ZIP mit der aktuellen Version aus dem Netz oder von einer lokalen Quelle, vergleicht den Inhalt mit der laufenden Installation, fragt vor jeder destruktiven Aktion nach und synchronisiert anschließend die konfigurierten Verzeichnisse. UI-Sprache wird aus der OS-Locale (`LC_ALL` / `LC_MESSAGES` / `LANG`) gezogen — unterstützt Deutsch, Englisch und Französisch.
 
 Geschrieben in Go, ohne CGo, ohne externe Dienstprogramme. Liefert kleine, stripped Single-File-Binaries für Windows, macOS und Linux.
 
@@ -17,6 +17,7 @@ Geschrieben in Go, ohne CGo, ohne externe Dienstprogramme. Liefert kleine, strip
 - [Verhalten bei Service-Fehlern](#verhalten-bei-service-fehlern)
 - [Logging](#logging)
 - [Backup](#backup)
+- [DB-Backup (pg_dump)](#db-backup-pg_dump)
 - [Exit-Codes](#exit-codes)
 - [Build](#build)
 - [Tests](#tests)
@@ -69,7 +70,7 @@ Beispiel:
 
 ```properties
 # === Download ===
-download.url = https://cloud.example.org/s/releases/tOSCE-Server-latest.zip
+download.url = https://example.org/releases/app-latest.zip
 download.timeout.seconds = 300
 
 # === Proxy (leer = direkt) ===
@@ -83,17 +84,23 @@ proxy.no_proxy = localhost,127.0.0.1
 sync.directories = bin, www, etc, lib, libs
 
 # === Service-Kommandos (per Betriebssystem) ===
-service.stop.windows  = net stop tOSCEServer
-service.stop.darwin   = launchctl stop org.ucan.tosce
-service.stop.linux    = systemctl stop tosce
-service.start.windows = net start tOSCEServer
-service.start.darwin  = launchctl start org.ucan.tosce
-service.start.linux   = systemctl start tosce
+service.stop.windows  = net stop MyService
+service.stop.darwin   = launchctl stop org.example.myapp
+service.stop.linux    = systemctl stop myservice
+service.start.windows = net start MyService
+service.start.darwin  = launchctl start org.example.myapp
+service.start.linux   = systemctl start myservice
 service.stop.timeout.seconds  = 60
 service.start.timeout.seconds = 60
 
 # === Backup ===
 backup.directory = backup
+
+# === Optionaler DB-Dump (pg_dump) ===
+#pgdump.path.windows = C:\Program Files\PostgreSQL\16\bin\pg_dump.exe
+#pgdump.path.darwin  = /opt/homebrew/opt/postgresql@16/bin/pg_dump
+#pgdump.path.linux   = /usr/bin/pg_dump
+#pgdump.args = -h localhost -p 5432 -U postgres mydb
 ```
 
 **Format-Regeln (einfach):**
@@ -136,7 +143,7 @@ updater --help                    Hilfe
 ├─ 6  Diff             Size-Pre-Check + xxhash64 lazy
 ├─ 7  Report           +N ~M -K pro Sync-Dir + Gesamt
 ├─ 8  Review-Prompt    3-Wege: Weiter [J] / Abbruch [n] / Liste [a]
-├─ 9  Backup-Prompt    optional: <root>/backup/<timestamp>.zip
+├─ 9  Backup-Prompts   2 unabhängige Fragen: ZIP-Backup + DB-Backup (pg_dump)
 ├─ 10 Update-Prompt    Abbruch möglich
 ├─ 11 Apply            copy/overwrite/delete, leere Parent-Dirs prunen
 ├─ 12 Service-Start    OS-Kommando aus Config
@@ -225,6 +232,29 @@ Inhalt:
 - Rekursiv alle regulären Dateien aus den Sync-Verzeichnissen.
 - Unix-Mode-Bits (`chmod`) bleiben erhalten.
 - Symlinks werden übersprungen.
+
+## DB-Backup (pg_dump)
+
+Der DB-Backup-Prompt wird **immer** gestellt — unabhängig von der Antwort auf den ZIP-Backup-Prompt. Bei "Ja" versucht tUPDATE einen `pg_dump`-Lauf.
+
+```
+<app-root>/<backup.directory>/<yyyy-MM-dd-HH-mm-ss>-db.backup
+```
+
+- Format: `-Fc` (PostgreSQL Custom Format, komprimiert, mit `pg_restore` einspielbar)
+- Hartkodierter Timeout: 30 Minuten
+- Identischer Timestamp wie das ZIP-Backup (falls auch erstellt) → Paare bilden direkt zusammen
+- Stdout + Stderr des `pg_dump`-Prozesses werden ins Logfile gespiegelt
+- `pgdump.args` (optional) wird zusätzlich übergeben (`strings.Fields`-Splitting, keine Quoting-Unterstützung)
+- Connection-Parameter via `pgdump.args` ODER via libpq-Env (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `.pgpass`)
+
+**Binary-Lookup-Reihenfolge:**
+
+1. `pgdump.path.<aktuelles-OS>` aus der Properties-Datei
+2. Fallback: `exec.LookPath("pg_dump")` (Standard-PATH-Suche)
+3. Wenn beides leer → Info-Zeile auf der Konsole + im Logfile, Workflow läuft weiter
+
+**Fehlerverhalten:** Schlägt `pg_dump` fehl (Exit-Code ≠ 0 oder Timeout), gibt tUPDATE die Fehlermeldung aus und macht weiter. Es gibt keinen "Continue anyway"-Prompt und keinen dedizierten Exit-Code. Die teilweise geschriebene `.backup`-Datei wird gelöscht, damit kein 0-Byte-Müll liegen bleibt.
 
 ## Exit-Codes
 
