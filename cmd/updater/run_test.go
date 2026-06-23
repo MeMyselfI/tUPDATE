@@ -303,8 +303,8 @@ func TestRunApp_AppliesUpdateWithNoPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backup dir missing: %v", err)
 	}
-	if len(backups) != 1 || !strings.HasSuffix(backups[0].Name(), ".zip") {
-		t.Errorf("expected one *.zip in backup/, got %v", backups)
+	if len(backups) != 1 || !strings.HasSuffix(backups[0].Name(), ".tar.xz") {
+		t.Errorf("expected one *.tar.xz in backup/, got %v", backups)
 	}
 }
 

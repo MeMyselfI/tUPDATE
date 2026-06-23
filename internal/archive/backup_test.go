@@ -1,7 +1,7 @@
 package archive
 
 import (
-	"archive/zip"
+	"archive/tar"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ulikunitz/xz"
 )
 
 func writeFileMode(t *testing.T, path, content string, mode os.FileMode) {
@@ -25,14 +27,47 @@ func writeFileMode(t *testing.T, path, content string, mode os.FileMode) {
 	}
 }
 
-func listZip(t *testing.T, path string) []*zip.File {
+// archiveEntry is a decoded tar member from a .tar.xz backup.
+type archiveEntry struct {
+	mode os.FileMode
+	body string
+}
+
+// readBackup decompresses a .tar.xz backup and returns its regular-file
+// members keyed by slash-path name (directories excluded).
+func readBackup(t *testing.T, path string) map[string]archiveEntry {
 	t.Helper()
-	rc, err := zip.OpenReader(path)
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open backup: %v", err)
 	}
-	t.Cleanup(func() { rc.Close() })
-	return rc.File
+	t.Cleanup(func() { f.Close() })
+
+	xr, err := xz.NewReader(f)
+	if err != nil {
+		t.Fatalf("xz reader: %v", err)
+	}
+	tr := tar.NewReader(xr)
+
+	out := make(map[string]archiveEntry)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar next: %v", err)
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			continue
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read %s: %v", hdr.Name, err)
+		}
+		out[hdr.Name] = archiveEntry{mode: hdr.FileInfo().Mode().Perm(), body: string(body)}
+	}
+	return out
 }
 
 func TestBackupDirs_BasicTree(t *testing.T) {
@@ -45,21 +80,19 @@ func TestBackupDirs_BasicTree(t *testing.T) {
 	writeFileMode(t, filepath.Join(app, "etc", "sub", "deep.txt"), "deep", 0o644)
 
 	ts := time.Date(2026, 6, 16, 14, 32, 5, 0, time.UTC)
-	zipPath, err := BackupDirs(app, backup, []string{"bin", "etc"}, ts)
+	outPath, err := BackupDirs(app, backup, []string{"bin", "etc"}, ts, nil)
 	if err != nil {
 		t.Fatalf("BackupDirs: %v", err)
 	}
-	wantName := "2026-06-16-14-32-05.zip"
-	if filepath.Base(zipPath) != wantName {
-		t.Errorf("zip name = %q, want %q", filepath.Base(zipPath), wantName)
+	wantName := "2026-06-16-14-32-05.tar.xz"
+	if filepath.Base(outPath) != wantName {
+		t.Errorf("archive name = %q, want %q", filepath.Base(outPath), wantName)
 	}
 
-	files := listZip(t, zipPath)
+	entries := readBackup(t, outPath)
 	var names []string
-	for _, f := range files {
-		if !strings.HasSuffix(f.Name, "/") {
-			names = append(names, f.Name)
-		}
+	for name := range entries {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	want := []string{"bin/run.sh", "etc/config.txt", "etc/sub/deep.txt"}
@@ -78,21 +111,17 @@ func TestBackupDirs_PreservesUnixModeBits(t *testing.T) {
 	writeFileMode(t, filepath.Join(app, "bin", "exec"), "x", 0o755)
 	writeFileMode(t, filepath.Join(app, "bin", "ro"), "y", 0o400)
 
-	zipPath, err := BackupDirs(app, backup, []string{"bin"}, time.Now())
+	outPath, err := BackupDirs(app, backup, []string{"bin"}, time.Now(), nil)
 	if err != nil {
 		t.Fatalf("BackupDirs: %v", err)
 	}
 
-	files := listZip(t, zipPath)
-	got := make(map[string]os.FileMode)
-	for _, f := range files {
-		got[f.Name] = f.Mode().Perm()
+	entries := readBackup(t, outPath)
+	if entries["bin/exec"].mode != 0o755 {
+		t.Errorf("bin/exec mode = %o, want 0755", entries["bin/exec"].mode)
 	}
-	if got["bin/exec"] != 0o755 {
-		t.Errorf("bin/exec mode = %o, want 0755", got["bin/exec"])
-	}
-	if got["bin/ro"] != 0o400 {
-		t.Errorf("bin/ro mode = %o, want 0400", got["bin/ro"])
+	if entries["bin/ro"].mode != 0o400 {
+		t.Errorf("bin/ro mode = %o, want 0400", entries["bin/ro"].mode)
 	}
 }
 
@@ -102,35 +131,45 @@ func TestBackupDirs_RoundTripContents(t *testing.T) {
 	backup := filepath.Join(tmp, "backup")
 	writeFileMode(t, filepath.Join(app, "libs", "foo.jar"), "JAR-BODY", 0o644)
 
-	zipPath, err := BackupDirs(app, backup, []string{"libs"}, time.Now())
+	outPath, err := BackupDirs(app, backup, []string{"libs"}, time.Now(), nil)
 	if err != nil {
 		t.Fatalf("BackupDirs: %v", err)
 	}
 
-	rc, err := zip.OpenReader(zipPath)
-	if err != nil {
-		t.Fatalf("open: %v", err)
+	entries := readBackup(t, outPath)
+	e, ok := entries["libs/foo.jar"]
+	if !ok {
+		t.Fatal("libs/foo.jar not found in backup")
 	}
-	defer rc.Close()
+	if e.body != "JAR-BODY" {
+		t.Errorf("body = %q", e.body)
+	}
+}
 
-	var found bool
-	for _, f := range rc.File {
-		if f.Name != "libs/foo.jar" {
-			continue
-		}
-		found = true
-		body, err := f.Open()
-		if err != nil {
-			t.Fatal(err)
-		}
-		data, _ := io.ReadAll(body)
-		body.Close()
-		if string(data) != "JAR-BODY" {
-			t.Errorf("body = %q", data)
-		}
+func TestBackupDirs_ReportsProgress(t *testing.T) {
+	tmp := t.TempDir()
+	app := filepath.Join(tmp, "app")
+	backup := filepath.Join(tmp, "backup")
+	writeFileMode(t, filepath.Join(app, "bin", "a"), strings.Repeat("a", 1000), 0o644)
+	writeFileMode(t, filepath.Join(app, "bin", "b"), strings.Repeat("b", 2000), 0o644)
+
+	var lastDone, lastTotal int64
+	calls := 0
+	_, err := BackupDirs(app, backup, []string{"bin"}, time.Now(), func(done, total int64) {
+		calls++
+		lastDone, lastTotal = done, total
+	})
+	if err != nil {
+		t.Fatalf("BackupDirs: %v", err)
 	}
-	if !found {
-		t.Error("libs/foo.jar not found in backup")
+	if calls == 0 {
+		t.Fatal("progress never called")
+	}
+	if lastTotal != 3000 {
+		t.Errorf("total = %d, want 3000", lastTotal)
+	}
+	if lastDone != 3000 {
+		t.Errorf("final done = %d, want 3000", lastDone)
 	}
 }
 
@@ -141,23 +180,23 @@ func TestBackupDirs_MissingDirSkipped(t *testing.T) {
 	writeFileMode(t, filepath.Join(app, "bin", "x"), "y", 0o644)
 
 	// "www" does not exist - should be skipped without error.
-	zipPath, err := BackupDirs(app, backup, []string{"bin", "www"}, time.Now())
+	outPath, err := BackupDirs(app, backup, []string{"bin", "www"}, time.Now(), nil)
 	if err != nil {
 		t.Fatalf("BackupDirs: %v", err)
 	}
-	if _, err := os.Stat(zipPath); err != nil {
-		t.Fatalf("zip missing: %v", err)
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("archive missing: %v", err)
 	}
 }
 
-func TestBackupDirs_EmptyDirSetCreatesEmptyZip(t *testing.T) {
+func TestBackupDirs_EmptyDirSetCreatesEmptyArchive(t *testing.T) {
 	tmp := t.TempDir()
-	zipPath, err := BackupDirs(tmp, filepath.Join(tmp, "backup"), []string{"none"}, time.Now())
+	outPath, err := BackupDirs(tmp, filepath.Join(tmp, "backup"), []string{"none"}, time.Now(), nil)
 	if err != nil {
 		t.Fatalf("BackupDirs: %v", err)
 	}
-	if _, err := os.Stat(zipPath); err != nil {
-		t.Fatalf("zip missing: %v", err)
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("archive missing: %v", err)
 	}
 }
 
@@ -168,12 +207,12 @@ func TestBackupDirs_FilenameFormat(t *testing.T) {
 	writeFileMode(t, filepath.Join(app, "bin", "x"), "y", 0o644)
 
 	ts := time.Date(2025, 1, 9, 8, 7, 6, 0, time.UTC)
-	zipPath, err := BackupDirs(app, backup, []string{"bin"}, ts)
+	outPath, err := BackupDirs(app, backup, []string{"bin"}, ts, nil)
 	if err != nil {
 		t.Fatalf("BackupDirs: %v", err)
 	}
-	if filepath.Base(zipPath) != "2025-01-09-08-07-06.zip" {
-		t.Errorf("filename = %q", filepath.Base(zipPath))
+	if filepath.Base(outPath) != "2025-01-09-08-07-06.tar.xz" {
+		t.Errorf("filename = %q", filepath.Base(outPath))
 	}
 }
 

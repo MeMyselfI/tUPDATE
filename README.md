@@ -38,7 +38,7 @@ Geschrieben in Go, ohne CGo, ohne externe Dienstprogramme. Liefert kleine, strip
 ├── lib/                          # synchronisiert (Beispiel)
 ├── libs/                         # synchronisiert (Beispiel)
 └── backup/                       # automatisch erzeugte Backups
-    └── 2026-06-16-17-25-01.zip
+    └── 2026-06-16-17-25-01.tar.xz
 ```
 
 Die Executable lebt im Unterordner `updater/`. tUPDATE löst die App-Root via `dirname(dirname(executable))` auf und findet `conf/`, die Sync-Verzeichnisse und das Backup-Verzeichnis als Geschwister von `updater/`.
@@ -140,7 +140,7 @@ Kurzüberblick:
 | `--app-root <path>` | App-Root explizit setzen |
 | `--dry-run` | nur Diff anzeigen, kein Apply |
 | `--no-prompt` | keine Rückfragen (Backup=ja, DB-Backup=ja, Update=ja, Service-Fehler=Abbruch) |
-| `--no-files-backup` | ZIP-Backup-Schritt komplett überspringen |
+| `--no-files-backup` | Datei-Backup-Schritt (`.tar.xz`) komplett überspringen |
 | `--no-db-backup` | DB-Backup-Schritt komplett überspringen |
 | `--ignore-service-errors` | Service-Stop/-Start-Fehler nur loggen, weiterlaufen |
 | `--skip-service` | Service-Stop/-Start gar nicht aufrufen |
@@ -190,7 +190,7 @@ Event-Schema (Auswahl):
 | `download_start` / `download_done` / `download_failed` | `url`, `bytes`, `reason` | Download-Phase |
 | `extract_done` | `ref_root` | nach ZIP-Entpacken |
 | `diff` | `added`, `modified`, `removed`, `per_dir` | nach Diff-Berechnung |
-| `backup_files_ok` / `backup_files_failed` | `path`, `bytes`, `reason` | ZIP-Backup |
+| `backup_files_ok` / `backup_files_failed` | `path`, `bytes`, `reason` | Datei-Backup (`.tar.xz`) |
 | `backup_db_ok` / `backup_db_failed` / `backup_db_skipped` | `path`, `bytes`, `reason` | pg_dump |
 | `service_stop_ok` / `service_stop_failed` | `reason` | Service-Stop |
 | `service_start_ok` / `service_start_failed` | `reason` | Service-Start |
@@ -276,7 +276,7 @@ Alle interaktiven Stellen sind via Flag steuerbar. `--ignore-service-errors` än
 ├─ 6  Diff             Size-Pre-Check + xxhash64 lazy
 ├─ 7  Report           +N ~M -K pro Sync-Dir + Gesamt
 ├─ 8  Review-Prompt    3-Wege: Weiter [J] / Abbruch [n] / Liste [a]
-├─ 9  Backup-Prompts   2 unabhängige Fragen: ZIP-Backup + DB-Backup (pg_dump)
+├─ 9  Backup-Prompts   2 unabhängige Fragen: Datei-Backup + DB-Backup (pg_dump)
 ├─ 10 Update-Prompt    Abbruch möglich
 ├─ 11 Apply            copy/overwrite/delete, leere Parent-Dirs prunen
 ├─ 12 Service-Start    OS-Kommando aus Config
@@ -356,10 +356,10 @@ Das Log enthält Start-/End-Marker mit RFC3339-Zeitstempel und alle Konsolen-Aus
 
 ## Backup
 
-Wenn der User die Rückfrage „Backup erstellen?" bejaht (oder `--no-prompt` Default `Ja` greift), werden alle in `sync.directories` aufgeführten Verzeichnisse vor der Apply-Phase in eine ZIP-Datei gepackt:
+Wenn der User die Rückfrage „Backup erstellen?" bejaht (oder `--no-prompt` Default `Ja` greift), werden alle in `sync.directories` aufgeführten Verzeichnisse vor der Apply-Phase in ein `tar`-Archiv gepackt und mit **xz/LZMA2** komprimiert (dieselbe Engine, die 7-Zip standardmäßig nutzt, Dictionary 64 MiB ≈ `xz -9` / 7-Zip `-mx9`):
 
 ```
-<app-root>/<backup.directory>/<yyyy-mm-dd-hh-mm-ss>.zip
+<app-root>/<backup.directory>/<yyyy-mm-dd-hh-mm-ss>.tar.xz
 ```
 
 Inhalt:
@@ -367,6 +367,12 @@ Inhalt:
 - Rekursiv alle regulären Dateien aus den Sync-Verzeichnissen.
 - Unix-Mode-Bits (`chmod`) bleiben erhalten.
 - Symlinks werden übersprungen.
+
+Hinweise:
+
+- **Entpacken** (manueller Restore): `tar -xJf <datei>.tar.xz`, 7-Zip, oder jedes `xz`-fähige Tool. tUPDATE spielt Backups nicht selbst zurück, sondern gibt nur den Pfad aus.
+- **Live-Fortschritt**: Auf einem interaktiven Terminal zeigt die Backup-Phase eine `\r`-Prozentanzeige (`Backup: NN% (… / …)`). Unter `--json`, `--detach` oder umgeleitetem stderr (`--logfile`) wird sie unterdrückt.
+- **Ressourcen**: Die maximale Kompression kostet CPU-Zeit und ~0,7 GB Encoder-RAM (BinaryTree-Matcher). Bei knappem Speicher `backupDictCap` in `internal/archive/backup.go` reduzieren.
 
 ## DB-Backup (pg_dump)
 
@@ -378,7 +384,7 @@ Der DB-Backup-Prompt wird **immer** gestellt — unabhängig von der Antwort auf
 
 - Format: `-Fc` (PostgreSQL Custom Format, komprimiert, mit `pg_restore` einspielbar)
 - Hartkodierter Timeout: 30 Minuten
-- Identischer Timestamp wie das ZIP-Backup (falls auch erstellt) → Paare bilden direkt zusammen
+- Identischer Timestamp wie das Datei-Backup (falls auch erstellt) → Paare bilden direkt zusammen
 - Stdout + Stderr des `pg_dump`-Prozesses werden ins Logfile gespiegelt
 - `pgdump.args` (optional) wird hinter `-Fc -f <out>` angehängt (`strings.Fields`-Splitting, keine Quoting-Unterstützung)
 
