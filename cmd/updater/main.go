@@ -173,7 +173,7 @@ func openLogFile(userPath string, ts time.Time) (string, *os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", nil, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := openLogShared(path)
 	if err != nil {
 		return "", nil, err
 	}

@@ -41,7 +41,12 @@ func BackupDirs(appRoot, backupDir string, dirs []string, ts time.Time, progress
 		return "", fmt.Errorf("backup: mkdir %s: %w", backupDir, err)
 	}
 
-	total, err := totalBytes(appRoot, dirs)
+	// Never walk into the backup directory itself: if it lives inside one of the
+	// sync dirs, the running backup would otherwise try to archive the .tar.xz
+	// it is currently writing — an ever-growing file that never finishes.
+	skipDir := filepath.Clean(backupDir)
+
+	total, err := totalBytes(appRoot, dirs, skipDir)
 	if err != nil {
 		return "", err
 	}
@@ -70,7 +75,7 @@ func BackupDirs(appRoot, backupDir string, dirs []string, ts time.Time, progress
 	}
 	var done int64
 	for _, dir := range dirs {
-		if err := addDirToTar(tw, appRoot, dir, &done, total, progress); err != nil {
+		if err := addDirToTar(tw, appRoot, dir, skipDir, &done, total, progress); err != nil {
 			tw.Close()
 			xw.Close()
 			os.Remove(outPath)
@@ -92,7 +97,7 @@ func BackupDirs(appRoot, backupDir string, dirs []string, ts time.Time, progress
 
 // totalBytes sums the sizes of all regular files under the given dirs so the
 // progress callback has a denominator. Missing dirs are skipped.
-func totalBytes(appRoot string, dirs []string) (int64, error) {
+func totalBytes(appRoot string, dirs []string, skipDir string) (int64, error) {
 	var total int64
 	for _, dir := range dirs {
 		srcRoot := filepath.Join(appRoot, dir)
@@ -105,6 +110,9 @@ func totalBytes(appRoot string, dirs []string) (int64, error) {
 		err := filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
+			}
+			if d.IsDir() && filepath.Clean(path) == skipDir {
+				return filepath.SkipDir
 			}
 			if d.Type().IsRegular() {
 				fi, err := d.Info()
@@ -122,7 +130,7 @@ func totalBytes(appRoot string, dirs []string) (int64, error) {
 	return total, nil
 }
 
-func addDirToTar(tw *tar.Writer, appRoot, dir string, done *int64, total int64, progress Progress) error {
+func addDirToTar(tw *tar.Writer, appRoot, dir, skipDir string, done *int64, total int64, progress Progress) error {
 	srcRoot := filepath.Join(appRoot, dir)
 	info, err := os.Lstat(srcRoot)
 	if err != nil {
@@ -138,6 +146,10 @@ func addDirToTar(tw *tar.Writer, appRoot, dir string, done *int64, total int64, 
 	return filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+
+		if d.IsDir() && filepath.Clean(path) == skipDir {
+			return filepath.SkipDir
 		}
 
 		if !d.IsDir() && !d.Type().IsRegular() {

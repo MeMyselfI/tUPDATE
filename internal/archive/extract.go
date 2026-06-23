@@ -11,8 +11,11 @@ import (
 
 // Extract unpacks zipPath into destDir.
 // Directories and file mode bits are preserved (best-effort on Windows).
-// Returns an error on zip-slip path traversal, unreadable entries, or write failures.
-func Extract(zipPath, destDir string) error {
+// If progress is non-nil it is called as entries are written, with done as the
+// number of uncompressed bytes extracted so far and total the sum of all entry
+// sizes. Returns an error on zip-slip path traversal, unreadable entries, or
+// write failures.
+func Extract(zipPath, destDir string, progress Progress) error {
 	rc, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("archive: open %s: %w", zipPath, err)
@@ -28,15 +31,26 @@ func Extract(zipPath, destDir string) error {
 		return fmt.Errorf("archive: abs %s: %w", destDir, err)
 	}
 
+	var total int64
 	for _, f := range rc.File {
-		if err := extractEntry(f, absDest); err != nil {
+		if !f.FileInfo().IsDir() {
+			total += int64(f.UncompressedSize64)
+		}
+	}
+
+	if progress != nil {
+		progress(0, total)
+	}
+	var done int64
+	for _, f := range rc.File {
+		if err := extractEntry(f, absDest, &done, total, progress); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractEntry(f *zip.File, absDest string) error {
+func extractEntry(f *zip.File, absDest string, done *int64, total int64, progress Progress) error {
 	cleanName := filepath.FromSlash(f.Name)
 	target := filepath.Join(absDest, cleanName)
 
@@ -68,7 +82,8 @@ func extractEntry(f *zip.File, absDest string) error {
 		return fmt.Errorf("archive: create %s: %w", target, err)
 	}
 
-	if _, err := io.Copy(dst, src); err != nil {
+	cw := &countingWriter{w: dst, done: done, total: total, progress: progress}
+	if _, err := io.Copy(cw, src); err != nil {
 		dst.Close()
 		return fmt.Errorf("archive: write %s: %w", target, err)
 	}

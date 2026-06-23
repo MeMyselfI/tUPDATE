@@ -162,7 +162,8 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	}
 	defer os.RemoveAll(tempDir)
 
-	if err := archive.Extract(zipFile, tempDir); err != nil {
+	fmt.Fprintln(stderr, s.Extracting)
+	if err := archive.Extract(zipFile, tempDir, ttyProgress(f, s.Extracting)); err != nil {
 		fmt.Fprintln(stderr, s.ExtractError, err)
 		emit.FatalError("extract", err.Error())
 		return exitExtract
@@ -261,7 +262,7 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	var backupPath string
 	if wantBackup {
 		fmt.Fprintln(stderr, s.BackupCreating)
-		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, backupTs, backupProgress(stderr, f, s))
+		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, backupTs, ttyProgress(f, s.BackupLabel))
 		if err != nil {
 			fmt.Fprintln(stderr, s.BackupError, err)
 			emit.BackupFilesFailed(err.Error())
@@ -367,12 +368,15 @@ func fileSize(path string) int64 {
 	return info.Size()
 }
 
-// backupProgress returns a throttled archive.Progress that animates a single
-// carriage-return line on stderr. It is enabled only on an interactive terminal
-// and disabled under --json, --detach, or a redirected stderr (e.g. --logfile),
-// where \r animation would corrupt the output. Returns nil to disable.
-func backupProgress(stderr io.Writer, f *flagSet, s i18n.Strings) archive.Progress {
-	if f.jsonOut || f.detach || !isTerminal(stderr) {
+// ttyProgress returns a throttled archive.Progress that animates a single
+// carriage-return line, prefixed with label. The animation is written directly
+// to os.Stderr — the real console — rather than the run-time stderr writer,
+// which is an io.MultiWriter teeing into the logfile (so \r would corrupt it).
+// It is enabled only when os.Stderr is an interactive terminal and disabled
+// under --json or --detach. Returns nil to disable, so callers can pass the
+// result straight through.
+func ttyProgress(f *flagSet, label string) archive.Progress {
+	if f.jsonOut || f.detach || !isTerminal(os.Stderr) {
 		return nil
 	}
 	var last time.Time
@@ -386,20 +390,16 @@ func backupProgress(stderr io.Writer, f *flagSet, s i18n.Strings) archive.Progre
 		if total > 0 {
 			pct = int(done * 100 / total)
 		}
-		fmt.Fprintf(stderr, "\r%s %3d%% (%s / %s)   ", s.BackupLabel, pct, fmtBytes(done), fmtBytes(total))
+		fmt.Fprintf(os.Stderr, "\r%s %3d%% (%s / %s)   ", label, pct, fmtBytes(done), fmtBytes(total))
 		if done >= total {
-			fmt.Fprintln(stderr)
+			fmt.Fprintln(os.Stderr)
 		}
 	}
 }
 
-// isTerminal reports whether w is a character device (a TTY), so progress
+// isTerminal reports whether f is a character device (a TTY), so progress
 // animation is only emitted to a real terminal.
-func isTerminal(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
+func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
 	if err != nil {
 		return false

@@ -173,6 +173,31 @@ func TestBackupDirs_ReportsProgress(t *testing.T) {
 	}
 }
 
+func TestBackupDirs_SkipsBackupDirInsideSyncDir(t *testing.T) {
+	tmp := t.TempDir()
+	app := filepath.Join(tmp, "app")
+	// backupDir lives *inside* the synced "data" dir — the self-inclusion trap.
+	backup := filepath.Join(app, "data", "backup")
+
+	writeFileMode(t, filepath.Join(app, "data", "real.txt"), "keep", 0o644)
+	writeFileMode(t, filepath.Join(backup, "old-2020.tar.xz"), "stale-backup", 0o644)
+
+	outPath, err := BackupDirs(app, backup, []string{"data"}, time.Now(), nil)
+	if err != nil {
+		t.Fatalf("BackupDirs: %v", err)
+	}
+
+	entries := readBackup(t, outPath)
+	if _, ok := entries["data/real.txt"]; !ok {
+		t.Error("data/real.txt should be in the backup")
+	}
+	for name := range entries {
+		if strings.HasPrefix(name, "data/backup/") {
+			t.Errorf("backup dir must be excluded, but archive contains %q", name)
+		}
+	}
+}
+
 func TestBackupDirs_MissingDirSkipped(t *testing.T) {
 	tmp := t.TempDir()
 	app := filepath.Join(tmp, "app")

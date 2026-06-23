@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -59,7 +60,7 @@ func TestExtract_Success(t *testing.T) {
 	})
 
 	out := filepath.Join(tmp, "out")
-	if err := Extract(zipPath, out); err != nil {
+	if err := Extract(zipPath, out, nil); err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
 
@@ -93,7 +94,7 @@ func TestExtract_PreservesUnixModeBits(t *testing.T) {
 	})
 
 	out := filepath.Join(tmp, "out")
-	if err := Extract(zipPath, out); err != nil {
+	if err := Extract(zipPath, out, nil); err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
 
@@ -122,7 +123,7 @@ func TestExtract_ZipSlipRejected(t *testing.T) {
 	})
 
 	out := filepath.Join(tmp, "out")
-	err := Extract(zipPath, out)
+	err := Extract(zipPath, out, nil)
 	if err == nil {
 		t.Fatal("expected zip-slip error")
 	}
@@ -139,7 +140,7 @@ func TestExtract_NestedDirsCreated(t *testing.T) {
 		{name: "a/b/c/d.txt", body: "deep", mode: 0o644},
 	})
 	out := filepath.Join(tmp, "out")
-	if err := Extract(zipPath, out); err != nil {
+	if err := Extract(zipPath, out, nil); err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(out, "a", "b", "c", "d.txt"))
@@ -152,8 +153,36 @@ func TestExtract_NestedDirsCreated(t *testing.T) {
 }
 
 func TestExtract_NonExistentZip(t *testing.T) {
-	err := Extract(filepath.Join(t.TempDir(), "missing.zip"), t.TempDir())
+	err := Extract(filepath.Join(t.TempDir(), "missing.zip"), t.TempDir(), nil)
 	if err == nil {
 		t.Fatal("expected error for missing zip")
+	}
+}
+
+func TestExtract_ReportsProgress(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "src.zip")
+	buildZip(t, zipPath, []zipEntry{
+		{name: "bin/", mode: 0o755, dir: true},
+		{name: "bin/a", body: strings.Repeat("a", 1000), mode: 0o644},
+		{name: "bin/b", body: strings.Repeat("b", 2000), mode: 0o644},
+	})
+
+	var lastDone, lastTotal int64
+	calls := 0
+	if err := Extract(zipPath, filepath.Join(tmp, "out"), func(done, total int64) {
+		calls++
+		lastDone, lastTotal = done, total
+	}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("progress never called")
+	}
+	if lastTotal != 3000 {
+		t.Errorf("total = %d, want 3000 (dir excluded)", lastTotal)
+	}
+	if lastDone != 3000 {
+		t.Errorf("final done = %d, want 3000", lastDone)
 	}
 }

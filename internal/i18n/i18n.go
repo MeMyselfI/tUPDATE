@@ -51,6 +51,7 @@ type Strings struct {
 	DownloadStart          string // "Downloading:"
 	DownloadFailed         string
 	DownloadHint           string // "Hint: use --zip <path> for a local file."
+	Extracting             string // "Extracting..." status line before unpacking.
 	ExtractError           string
 	PathError              string
 	PromptError            string
@@ -119,6 +120,7 @@ var en = Strings{
 	DownloadStart:          "Downloading:",
 	DownloadFailed:         "Download failed:",
 	DownloadHint:           "Hint: use --zip <path> for a local file.",
+	Extracting:             "Extracting...",
 	ExtractError:           "Extract error:",
 	PathError:              "Path error:",
 	PromptError:            "Prompt error:",
@@ -183,6 +185,7 @@ var de = Strings{
 	DownloadStart:          "Download:",
 	DownloadFailed:         "Download fehlgeschlagen:",
 	DownloadHint:           "Tipp: --zip <Pfad> für lokale Datei nutzen.",
+	Extracting:             "Entpacken...",
 	ExtractError:           "Extract-Fehler:",
 	PathError:              "Pfad-Fehler:",
 	PromptError:            "Prompt-Fehler:",
@@ -247,6 +250,7 @@ var fr = Strings{
 	DownloadStart:          "Téléchargement :",
 	DownloadFailed:         "Échec du téléchargement :",
 	DownloadHint:           "Astuce : utilisez --zip <chemin> pour un fichier local.",
+	Extracting:             "Extraction...",
 	ExtractError:           "Erreur d'extraction :",
 	PathError:              "Erreur de chemin :",
 	PromptError:            "Erreur de saisie :",
