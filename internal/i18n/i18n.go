@@ -73,6 +73,8 @@ type Strings struct {
 
 	// Backup / Apply
 	BackupQuestion               string
+	BackupFormatQuestion         string // "Which backup format?"
+	BackupLevelQuestion          string // "Which compression level?"
 	BackupCreating               string
 	BackupLabel                  string
 	BackupError                  string
@@ -139,6 +141,8 @@ var en = Strings{
 	ReportNoDirs:    "(no directories)",
 
 	BackupQuestion:               "Create backup of current directories?",
+	BackupFormatQuestion:         "Which backup format? (tar.xz = smaller, zip = faster/universal)",
+	BackupLevelQuestion:          "Which compression level? (min = fast, max = smallest but slow)",
 	BackupCreating:               "Creating backup...",
 	BackupLabel:                  "Backup:",
 	BackupError:                  "Backup error:",
@@ -204,6 +208,8 @@ var de = Strings{
 	ReportNoDirs:    "(keine Verzeichnisse)",
 
 	BackupQuestion:               "Backup der aktuellen Verzeichnisse erstellen?",
+	BackupFormatQuestion:         "Welches Backup-Format? (tar.xz = kleiner, zip = schneller/universell)",
+	BackupLevelQuestion:          "Welche Kompressionsstufe? (min = schnell, max = kleinste aber langsam)",
 	BackupCreating:               "Backup wird erstellt...",
 	BackupLabel:                  "Backup:",
 	BackupError:                  "Backup-Fehler:",
@@ -269,6 +275,8 @@ var fr = Strings{
 	ReportNoDirs:    "(aucun répertoire)",
 
 	BackupQuestion:               "Créer une sauvegarde des répertoires actuels ?",
+	BackupFormatQuestion:         "Quel format de sauvegarde ? (tar.xz = plus petit, zip = plus rapide/universel)",
+	BackupLevelQuestion:          "Quel niveau de compression ? (min = rapide, max = plus petit mais lent)",
 	BackupCreating:               "Création de la sauvegarde...",
 	BackupLabel:                  "Sauvegarde :",
 	BackupError:                  "Erreur de sauvegarde :",

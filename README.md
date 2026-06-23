@@ -142,6 +142,8 @@ Kurzüberblick:
 | `--no-prompt` | keine Rückfragen (Backup=ja, DB-Backup=ja, Update=ja, Service-Fehler=Abbruch) |
 | `--no-files-backup` | Datei-Backup-Schritt (`.tar.xz`) komplett überspringen |
 | `--no-db-backup` | DB-Backup-Schritt komplett überspringen |
+| `--backup-format <fmt>` | `zip` oder `tar.xz`. Ohne Flag interaktiv gefragt, sonst `tar.xz` |
+| `--backup-compression <l>` | `min` / `default` / `max`. Ohne Flag interaktiv gefragt, sonst `default` |
 | `--ignore-service-errors` | Service-Stop/-Start-Fehler nur loggen, weiterlaufen |
 | `--skip-service` | Service-Stop/-Start gar nicht aufrufen |
 | `--logfile <path>` | Logfile-Pfad selbst wählen (Default: `<TempDir>/updater-<ts>.log`) |
@@ -356,27 +358,46 @@ Das Log enthält Start-/End-Marker mit RFC3339-Zeitstempel und alle Konsolen-Aus
 
 ## Backup
 
-Wenn der User die Rückfrage „Backup erstellen?" bejaht (oder `--no-prompt` Default `Ja` greift), werden alle in `sync.directories` aufgeführten Verzeichnisse vor der Apply-Phase in ein `tar`-Archiv gepackt und mit **xz/LZMA2** komprimiert (dieselbe Engine, die 7-Zip standardmäßig nutzt, Dictionary 64 MiB ≈ `xz -9` / 7-Zip `-mx9`):
+Wenn der User die Rückfrage „Backup erstellen?" bejaht (oder `--no-prompt` Default `Ja` greift), werden alle in `sync.directories` aufgeführten Verzeichnisse vor der Apply-Phase in ein Archiv gepackt. **Format und Kompressionsstufe sind wählbar** — interaktiv per Rückfrage oder via `--backup-format` / `--backup-compression` (dann ohne Rückfrage):
 
 ```
-<app-root>/<backup.directory>/<yyyy-mm-dd-hh-mm-ss>.tar.xz
+<app-root>/<backup.directory>/<yyyy-mm-dd-hh-mm-ss>.tar.xz   (Default-Format)
+<app-root>/<backup.directory>/<yyyy-mm-dd-hh-mm-ss>.zip      (--backup-format zip)
 ```
+
+**Format:**
+
+| Format | Beschreibung |
+|--------|--------------|
+| `tar.xz` (Default) | tar + xz/LZMA2 (dieselbe Engine wie 7-Zip). Kleiner, einkernig. Restore: `tar -xJf`, 7-Zip, xz. |
+| `zip` | klassisches DEFLATE-ZIP. Größer, aber schneller und überall nativ entpackbar. |
+
+**Kompressionsstufe** (gilt für beide Formate):
+
+| Stufe | tar.xz (LZMA2) | zip (DEFLATE) | Charakter |
+|-------|----------------|---------------|-----------|
+| `min` | 1 MiB Dict, HashTable | BestSpeed | schnell, größer |
+| `default` | 8 MiB Dict, HashTable | Default | ausgewogen |
+| `max` | 64 MiB Dict, BinaryTree (`xz -9`-Klasse) | BestCompression | kleinste Datei, **langsam, ~0,7 GB RAM** |
+
+Ohne Flag/Prompt (z. B. `--no-prompt`): **`tar.xz` / `default`**.
 
 Inhalt:
 
 - Rekursiv alle regulären Dateien aus den Sync-Verzeichnissen.
 - Unix-Mode-Bits (`chmod`) bleiben erhalten.
 - Symlinks werden übersprungen.
+- Das Backup-Verzeichnis selbst wird beim Packen übersprungen (kein Selbst-Einschluss, auch wenn es in einem Sync-Verzeichnis liegt).
 
 Hinweise:
 
-- **Entpacken** (manueller Restore): `tar -xJf <datei>.tar.xz`, 7-Zip, oder jedes `xz`-fähige Tool. tUPDATE spielt Backups nicht selbst zurück, sondern gibt nur den Pfad aus.
-- **Live-Fortschritt**: Auf einem interaktiven Terminal zeigt die Backup-Phase eine `\r`-Prozentanzeige (`Backup: NN% (… / …)`). Unter `--json`, `--detach` oder umgeleitetem stderr (`--logfile`) wird sie unterdrückt.
-- **Ressourcen**: Die maximale Kompression kostet CPU-Zeit und ~0,7 GB Encoder-RAM (BinaryTree-Matcher). Bei knappem Speicher `backupDictCap` in `internal/archive/backup.go` reduzieren.
+- **Entpacken** (manueller Restore): tUPDATE spielt Backups nicht selbst zurück, sondern gibt nur den Pfad aus.
+- **Live-Fortschritt**: Auf einem interaktiven Terminal zeigt die Backup-Phase eine `\r`-Prozentanzeige. Unter `--json`, `--detach` oder umgeleitetem stderr (`--logfile`) wird sie unterdrückt.
+- **`max` ist auf großen Verzeichnissen sehr langsam** (einkernig); für Server-Backups vor einem Update meist `default` oder `zip`/`min` sinnvoller.
 
 ## DB-Backup (pg_dump)
 
-Der DB-Backup-Prompt wird **immer** gestellt — unabhängig von der Antwort auf den ZIP-Backup-Prompt. Bei "Ja" versucht tUPDATE einen `pg_dump`-Lauf.
+Der DB-Backup-Prompt wird **immer** gestellt — unabhängig von der Antwort auf den Datei-Backup-Prompt. Bei "Ja" versucht tUPDATE einen `pg_dump`-Lauf.
 
 ```
 <app-root>/<backup.directory>/<yyyy-MM-dd-HH-mm-ss>-db.backup

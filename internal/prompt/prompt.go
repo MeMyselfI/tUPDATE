@@ -20,10 +20,14 @@ const (
 	AnswerShowAll
 )
 
-// Prompter asks the user yes/no questions and three-way (yes/no/show) questions.
+// Prompter asks the user yes/no questions, three-way (yes/no/show) questions,
+// and single-choice menu questions.
 type Prompter interface {
 	Confirm(question string, def bool) (bool, error)
 	ConfirmContinueOrShow(question string) (Answer, error)
+	// Choose presents a numbered menu and returns the selected zero-based index.
+	// Empty input selects def. Automation returns def without prompting.
+	Choose(question string, options []string, def int) (int, error)
 }
 
 // Stdin is the default Prompter using stdio.
@@ -159,6 +163,70 @@ func (s *Stdin) ConfirmContinueOrShow(question string) (Answer, error) {
 	return AnswerYes, nil
 }
 
+// Choose presents the options as a numbered menu and returns the selected
+// zero-based index. The default (def) is marked and chosen on empty input.
+// Both the option number and the exact option text (case-insensitive) are
+// accepted. Invalid input is re-asked up to MaxAttempts times before falling
+// back to def.
+func (s *Stdin) Choose(question string, options []string, def int) (int, error) {
+	if def < 0 || def >= len(options) {
+		def = 0
+	}
+	attempts := s.MaxAttempts
+	if attempts <= 0 {
+		attempts = 3
+	}
+	retry := s.retryMessage()
+	if s.reader == nil {
+		s.reader = bufio.NewReader(s.In)
+	}
+	reader := s.reader
+
+	for i := 0; i < attempts; i++ {
+		fmt.Fprintln(s.Out, question)
+		for idx, opt := range options {
+			marker := " "
+			if idx == def {
+				marker = "*"
+			}
+			fmt.Fprintf(s.Out, "  %s %d) %s\n", marker, idx+1, opt)
+		}
+		if _, err := fmt.Fprintf(s.Out, "[%d]: ", def+1); err != nil {
+			return def, err
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return def, err
+		}
+		answer := strings.ToLower(strings.TrimSpace(line))
+		if answer == "" {
+			return def, nil
+		}
+		if idx, ok := matchChoice(answer, options); ok {
+			return idx, nil
+		}
+		if err == io.EOF {
+			return def, nil
+		}
+		fmt.Fprintln(s.Out, retry)
+	}
+	return def, nil
+}
+
+// matchChoice resolves a trimmed, lower-cased answer to an option index by
+// 1-based number or exact (case-insensitive) option text.
+func matchChoice(answer string, options []string) (int, bool) {
+	for idx, opt := range options {
+		if answer == strings.ToLower(opt) {
+			return idx, true
+		}
+		if answer == fmt.Sprintf("%d", idx+1) {
+			return idx, true
+		}
+	}
+	return 0, false
+}
+
 func (s *Stdin) suffixContinueOrShow() string {
 	if s.SuffixContinueOrShow != "" {
 		return s.SuffixContinueOrShow
@@ -212,4 +280,10 @@ func (a Always) ConfirmContinueOrShow(string) (Answer, error) {
 		return AnswerYes, nil
 	}
 	return AnswerNo, nil
+}
+
+// Choose returns the default index without prompting, so automation uses the
+// caller-supplied default selection.
+func (a Always) Choose(_ string, _ []string, def int) (int, error) {
+	return def, nil
 }

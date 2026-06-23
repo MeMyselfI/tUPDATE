@@ -15,6 +15,53 @@ func newStdin(input string) (*Stdin, *bytes.Buffer) {
 	}, out
 }
 
+func TestChoose_EmptyUsesDefault(t *testing.T) {
+	p, _ := newStdin("\n")
+	idx, err := p.Choose("format?", []string{"tar.xz", "zip"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx != 0 {
+		t.Errorf("idx = %d, want 0 (default)", idx)
+	}
+}
+
+func TestChoose_ByNumber(t *testing.T) {
+	p, _ := newStdin("2\n")
+	idx, err := p.Choose("format?", []string{"tar.xz", "zip"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx != 1 {
+		t.Errorf("idx = %d, want 1", idx)
+	}
+}
+
+func TestChoose_ByText(t *testing.T) {
+	p, _ := newStdin("MAX\n")
+	idx, err := p.Choose("level?", []string{"min", "default", "max"}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx != 2 {
+		t.Errorf("idx = %d, want 2", idx)
+	}
+}
+
+func TestChoose_ReAsksOnInvalidThenDefault(t *testing.T) {
+	p, out := newStdin("nope\n\n")
+	idx, err := p.Choose("level?", []string{"min", "default", "max"}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx != 1 {
+		t.Errorf("idx = %d, want 1 (default after empty)", idx)
+	}
+	if !strings.Contains(out.String(), "min") {
+		t.Error("menu options should be printed")
+	}
+}
+
 func TestConfirm_YesShort(t *testing.T) {
 	p, _ := newStdin("y\n")
 	ok, err := p.Confirm("question?", false)

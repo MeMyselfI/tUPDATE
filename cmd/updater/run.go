@@ -52,6 +52,8 @@ type flagSet struct {
 	detach              bool
 	jsonOut             bool
 	lang                string
+	backupFormat        string
+	backupCompression   string
 	showVersion         bool
 }
 
@@ -163,7 +165,7 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	defer os.RemoveAll(tempDir)
 
 	fmt.Fprintln(stderr, s.Extracting)
-	if err := archive.Extract(zipFile, tempDir, ttyProgress(f, s.Extracting)); err != nil {
+	if err := archive.Extract(zipFile, tempDir, ttyProgress(f)); err != nil {
 		fmt.Fprintln(stderr, s.ExtractError, err)
 		emit.FatalError("extract", err.Error())
 		return exitExtract
@@ -261,8 +263,14 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 
 	var backupPath string
 	if wantBackup {
-		fmt.Fprintln(stderr, s.BackupCreating)
-		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, backupTs, ttyProgress(f, s.BackupLabel))
+		backupOpts, err := resolveBackupOptions(f, prompter, s)
+		if err != nil {
+			fmt.Fprintln(stderr, s.BackupError, err)
+			maybeStartService()
+			return exitUserAbort
+		}
+		fmt.Fprintf(stderr, "%s (%s / %s)\n", s.BackupCreating, backupOpts.Format, backupOpts.Level)
+		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, backupTs, backupOpts, ttyProgress(f))
 		if err != nil {
 			fmt.Fprintln(stderr, s.BackupError, err)
 			emit.BackupFilesFailed(err.Error())
@@ -369,13 +377,14 @@ func fileSize(path string) int64 {
 }
 
 // ttyProgress returns a throttled archive.Progress that animates a single
-// carriage-return line, prefixed with label. The animation is written directly
-// to os.Stderr — the real console — rather than the run-time stderr writer,
-// which is an io.MultiWriter teeing into the logfile (so \r would corrupt it).
-// It is enabled only when os.Stderr is an interactive terminal and disabled
-// under --json or --detach. Returns nil to disable, so callers can pass the
-// result straight through.
-func ttyProgress(f *flagSet, label string) archive.Progress {
+// carriage-return percentage line below the caller's own status line (e.g.
+// "Entpacken..."). It carries no text label of its own to avoid repeating that
+// status text. The animation is written directly to os.Stderr — the real
+// console — rather than the run-time stderr writer, which is an io.MultiWriter
+// teeing into the logfile (so \r would corrupt it). It is enabled only when
+// os.Stderr is an interactive terminal and disabled under --json or --detach.
+// Returns nil to disable, so callers can pass the result straight through.
+func ttyProgress(f *flagSet) archive.Progress {
 	if f.jsonOut || f.detach || !isTerminal(os.Stderr) {
 		return nil
 	}
@@ -390,7 +399,7 @@ func ttyProgress(f *flagSet, label string) archive.Progress {
 		if total > 0 {
 			pct = int(done * 100 / total)
 		}
-		fmt.Fprintf(os.Stderr, "\r%s %3d%% (%s / %s)   ", label, pct, fmtBytes(done), fmtBytes(total))
+		fmt.Fprintf(os.Stderr, "\r  %3d%% (%s / %s)   ", pct, fmtBytes(done), fmtBytes(total))
 		if done >= total {
 			fmt.Fprintln(os.Stderr)
 		}
@@ -656,6 +665,45 @@ func okOrFail(ok bool) string {
 
 // newPrompter wires an interactive Stdin prompter localised to s, or
 // returns prompt.Always{true} when running with --no-prompt.
+// resolveBackupOptions decides the backup format and compression level. An
+// explicit --backup-format / --backup-compression flag wins and is validated;
+// otherwise the prompter is asked — which, under --no-prompt, returns the
+// defaults (tar.xz / default) without prompting. The option slices are ordered
+// to match the archive enum values, so the chosen index casts directly.
+func resolveBackupOptions(f *flagSet, p prompt.Prompter, s i18n.Strings) (archive.BackupOptions, error) {
+	var opts archive.BackupOptions
+
+	if f.backupFormat != "" {
+		format, ok := archive.ParseBackupFormat(f.backupFormat)
+		if !ok {
+			return opts, fmt.Errorf("--backup-format: invalid value %q, expected zip|tar.xz", f.backupFormat)
+		}
+		opts.Format = format
+	} else {
+		idx, err := p.Choose(s.BackupFormatQuestion, []string{"tar.xz", "zip"}, int(archive.FormatTarXz))
+		if err != nil {
+			return opts, err
+		}
+		opts.Format = archive.BackupFormat(idx)
+	}
+
+	if f.backupCompression != "" {
+		level, ok := archive.ParseCompressionLevel(f.backupCompression)
+		if !ok {
+			return opts, fmt.Errorf("--backup-compression: invalid value %q, expected min|default|max", f.backupCompression)
+		}
+		opts.Level = level
+	} else {
+		idx, err := p.Choose(s.BackupLevelQuestion, []string{"min", "default", "max"}, int(archive.LevelDefault))
+		if err != nil {
+			return opts, err
+		}
+		opts.Level = archive.CompressionLevel(idx)
+	}
+
+	return opts, nil
+}
+
 func newPrompter(stdin io.Reader, stdout io.Writer, noPrompt bool, s i18n.Strings) prompt.Prompter {
 	if noPrompt {
 		return prompt.Always{Answer: true}
@@ -741,6 +789,8 @@ func parseFlags(args []string, stdout, stderr io.Writer) (*flagSet, error) {
 	fs.BoolVar(&f.ignoreServiceErrors, "ignore-service-errors", false, "bei Stop/Start-Fehler weitermachen / continue past service stop/start failures")
 	fs.BoolVar(&f.jsonOut, "json", false, "NDJSON-Events auf stdout (setzt --no-prompt voraus) / NDJSON events on stdout")
 	fs.StringVar(&f.lang, "lang", "", "UI-Sprache erzwingen: de | en | fr (Default: aus Env)")
+	fs.StringVar(&f.backupFormat, "backup-format", "", "Backup-Format: zip | tar.xz (Default: interaktiv fragen, sonst tar.xz)")
+	fs.StringVar(&f.backupCompression, "backup-compression", "", "Kompression: min | default | max (Default: interaktiv fragen, sonst default)")
 	fs.BoolVar(&f.showVersion, "version", false, "Version anzeigen / show version")
 
 	fs.Usage = func() { writeHelp(stdout) }
@@ -771,8 +821,11 @@ SERVICE
   --ignore-service-errors  bei Stop/Start-Fehler weitermachen statt abbrechen
 
 BACKUP
-  --no-files-backup        ZIP-Backup-Schritt komplett ueberspringen (Prompt entfaellt)
+  --no-files-backup        Datei-Backup-Schritt komplett ueberspringen (Prompt entfaellt)
   --no-db-backup           DB-Backup (pg_dump) komplett ueberspringen (Prompt entfaellt)
+  --backup-format <fmt>    zip | tar.xz -- ohne Flag interaktiv gefragt, sonst tar.xz
+  --backup-compression <l> min | default | max -- ohne Flag interaktiv gefragt,
+                           sonst default. min=schnell, max=kleinste Datei (langsam)
 
 INTERACTION
   --no-prompt              keine Rueckfragen (Backup=ja, DB-Backup=ja, Update=ja,
