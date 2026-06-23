@@ -13,15 +13,17 @@ SYSO_FILES = \
   $(SYSO_DIR)/resource_windows_arm.syso \
   $(SYSO_DIR)/resource_windows_arm64.syso
 
-# Targets that go into UPX-packing (darwin skipped: codesigning/notarization friendliness).
+# Targets that go into UPX-packing. Excluded:
+#   - darwin: UPX breaks codesigning/notarization.
+#   - windows-arm64: UPX 5.x rejects win64/arm64 ("not yet supported").
 UPX_TARGETS = \
   $(DIST)/updater-windows-amd64.exe \
-  $(DIST)/updater-windows-arm64.exe \
   $(DIST)/updater-linux-amd64 \
   $(DIST)/updater-linux-arm64
 
 ALL_TARGETS = \
   $(UPX_TARGETS) \
+  $(DIST)/updater-windows-arm64.exe \
   $(DIST)/updater-darwin-amd64 \
   $(DIST)/updater-darwin-arm64 \
   $(DIST)/updater-darwin-universal

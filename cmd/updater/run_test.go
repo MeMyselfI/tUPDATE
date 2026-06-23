@@ -162,6 +162,7 @@ func TestRunApp_DryRunShowsDiff(t *testing.T) {
 		"--app-root", live,
 		"--skip-service",
 		"--dry-run",
+		"--lang", "en",
 	}
 	var stdout, stderr bytes.Buffer
 	code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test")
@@ -169,7 +170,7 @@ func TestRunApp_DryRunShowsDiff(t *testing.T) {
 		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"Diff:", "bin/", "www/", "etc/", "Gesamt"} {
+	for _, want := range []string{"Diff:", "bin/", "www/", "etc/", "Total"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout missing %q\n%s", want, out)
 		}

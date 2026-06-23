@@ -26,6 +26,21 @@ func TestLang_String(t *testing.T) {
 	}
 }
 
+func TestDetectFromEnv_OKFlag(t *testing.T) {
+	clearLocaleEnv(t)
+	if l, ok := detectFromEnv(); ok {
+		t.Errorf("detectFromEnv() empty env = (%v, %v), want ok=false", l, ok)
+	}
+	t.Setenv("LANG", "es_ES.UTF-8")
+	if l, ok := detectFromEnv(); ok {
+		t.Errorf("detectFromEnv() unsupported = (%v, %v), want ok=false", l, ok)
+	}
+	t.Setenv("LANG", "de_DE.UTF-8")
+	if l, ok := detectFromEnv(); !ok || l != LangDE {
+		t.Errorf("detectFromEnv() de = (%v, %v), want (LangDE, true)", l, ok)
+	}
+}
+
 func TestDetect_FallsBackToEnglishWhenEnvEmpty(t *testing.T) {
 	clearLocaleEnv(t)
 	if got := Detect(); got != LangEN {
@@ -156,10 +171,10 @@ func TestStrings_PromptSuffixesPerLanguage(t *testing.T) {
 
 func TestParseLang_AcceptsAllThree(t *testing.T) {
 	cases := map[string]Lang{
-		"de": LangDE,
-		"DE": LangDE,
-		"en": LangEN,
-		"fr": LangFR,
+		"de":   LangDE,
+		"DE":   LangDE,
+		"en":   LangEN,
+		"fr":   LangFR,
 		" Fr ": LangFR,
 	}
 	for input, want := range cases {

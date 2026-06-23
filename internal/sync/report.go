@@ -43,10 +43,13 @@ type reportRow struct {
 //	  bin/   :  +3  ~12  -1
 //	  www/   :  +0   ~5  -0
 //	  etc/   :  +1   ~0  -2
-//	Gesamt :  +4  ~12  -3
-func FormatReport(diffs []DirDiff) string {
+//	Total  :  +4  ~12  -3
+//
+// The total and noDirs labels are supplied by the caller (typically from the
+// active i18n bundle) so this package stays language-agnostic.
+func FormatReport(diffs []DirDiff, total, noDirs string) string {
 	if len(diffs) == 0 {
-		return "Diff: (keine Verzeichnisse)\n"
+		return "Diff: " + noDirs + "\n"
 	}
 
 	rows := make([]reportRow, 0, len(diffs))
@@ -56,7 +59,7 @@ func FormatReport(diffs []DirDiff) string {
 	}
 	sum := Summarize(diffs)
 
-	labelWidth := len("Gesamt")
+	labelWidth := len(total)
 	for _, r := range rows {
 		if w := len(r.label); w > labelWidth {
 			labelWidth = w
@@ -78,7 +81,7 @@ func FormatReport(diffs []DirDiff) string {
 		)
 	}
 	fmt.Fprintf(&b, "%-*s :  %*s  %*s  %*s\n",
-		labelWidth+2, "Gesamt",
+		labelWidth+2, total,
 		addW, fmt.Sprintf("+%d", sum.Added),
 		modW, fmt.Sprintf("~%d", sum.Modified),
 		remW, fmt.Sprintf("-%d", sum.Removed),

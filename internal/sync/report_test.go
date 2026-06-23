@@ -54,9 +54,9 @@ func TestFormatReport_ContainsAllDirsAndTotals(t *testing.T) {
 			{Path: "old.jar", Type: Removed},
 		}},
 	}
-	out := FormatReport(diffs)
+	out := FormatReport(diffs, "Total", "(no directories)")
 
-	for _, expected := range []string{"bin/", "www/", "etc/", "libs/", "Gesamt"} {
+	for _, expected := range []string{"bin/", "www/", "etc/", "libs/", "Total"} {
 		if !strings.Contains(out, expected) {
 			t.Errorf("output missing %q\n%s", expected, out)
 		}
@@ -73,8 +73,8 @@ func TestFormatReport_ContainsAllDirsAndTotals(t *testing.T) {
 }
 
 func TestFormatReport_EmptyDiffs(t *testing.T) {
-	out := FormatReport(nil)
-	if !strings.Contains(out, "keine Verzeichnisse") {
+	out := FormatReport(nil, "Total", "(no directories)")
+	if !strings.Contains(out, "(no directories)") {
 		t.Errorf("empty report unexpected: %q", out)
 	}
 }
@@ -84,8 +84,8 @@ func TestFormatReport_AllZerosStillRenders(t *testing.T) {
 		{Dir: "bin"},
 		{Dir: "www"},
 	}
-	out := FormatReport(diffs)
-	if !strings.Contains(out, "bin/") || !strings.Contains(out, "Gesamt") {
+	out := FormatReport(diffs, "Total", "(no directories)")
+	if !strings.Contains(out, "bin/") || !strings.Contains(out, "Total") {
 		t.Errorf("zero diff not rendered: %q", out)
 	}
 	if !strings.Contains(out, "+0") || !strings.Contains(out, "~0") || !strings.Contains(out, "-0") {
@@ -146,7 +146,7 @@ func TestFormatReport_LongDirNameAligned(t *testing.T) {
 		{Dir: "very-long-directory-name", Changes: []Change{{Path: "x", Type: Added}}},
 		{Dir: "x", Changes: []Change{{Path: "y", Type: Removed}}},
 	}
-	out := FormatReport(diffs)
+	out := FormatReport(diffs, "Total", "(no directories)")
 	if !strings.Contains(out, "very-long-directory-name/") {
 		t.Errorf("long name missing: %q", out)
 	}

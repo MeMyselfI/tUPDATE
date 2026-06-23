@@ -221,7 +221,7 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 		return exitSync
 	}
 
-	fmt.Fprint(stdout, sync.FormatReport(diffs))
+	fmt.Fprint(stdout, sync.FormatReport(diffs, s.ReportTotal, s.ReportNoDirs))
 	summary := sync.Summarize(diffs)
 	emit.Diff(summary.Added, summary.Modified, summary.Removed, diffPerDirMap(diffs))
 

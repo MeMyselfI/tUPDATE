@@ -67,6 +67,8 @@ type Strings struct {
 	DryRunDone      string
 	NoChanges       string
 	WrapperDetected string // "Wrapper folder in ZIP detected: %s — using it as reference root."
+	ReportTotal     string // Label of the totals row in the diff report.
+	ReportNoDirs    string // Shown after "Diff:" when there are no directories.
 
 	// Backup / Apply
 	BackupQuestion               string
@@ -131,6 +133,8 @@ var en = Strings{
 	DryRunDone:      "Dry run finished, no changes made.",
 	NoChanges:       "No changes.",
 	WrapperDetected: "Wrapper folder in ZIP detected: %s — using it as reference root.",
+	ReportTotal:     "Total",
+	ReportNoDirs:    "(no directories)",
 
 	BackupQuestion:               "Create backup of current directories?",
 	BackupCreating:               "Creating backup...",
@@ -193,6 +197,8 @@ var de = Strings{
 	DryRunDone:      "Dry-Run beendet, keine Änderungen.",
 	NoChanges:       "Keine Änderungen.",
 	WrapperDetected: "Wrapper-Ordner im ZIP erkannt: %s — wird als Referenz-Root verwendet.",
+	ReportTotal:     "Gesamt",
+	ReportNoDirs:    "(keine Verzeichnisse)",
 
 	BackupQuestion:               "Backup der aktuellen Verzeichnisse erstellen?",
 	BackupCreating:               "Backup wird erstellt...",
@@ -255,6 +261,8 @@ var fr = Strings{
 	DryRunDone:      "Dry-run terminé, aucune modification.",
 	NoChanges:       "Aucune modification.",
 	WrapperDetected: "Dossier wrapper détecté dans le ZIP : %s — utilisé comme racine de référence.",
+	ReportTotal:     "Total",
+	ReportNoDirs:    "(aucun répertoire)",
 
 	BackupQuestion:               "Créer une sauvegarde des répertoires actuels ?",
 	BackupCreating:               "Création de la sauvegarde...",
@@ -315,11 +323,28 @@ func ParseLang(s string) (Lang, bool) {
 	return LangEN, false
 }
 
-// Detect inspects locale environment variables and returns the matching Lang.
-// Inspection order: LC_ALL, LC_MESSAGES, LANG. The first non-empty value's
-// two-letter ISO prefix decides the language. "C" / "POSIX" / unsupported
-// languages fall back to LangEN.
+// Detect determines the UI language. It inspects locale environment variables
+// first and, if none yields a supported language, falls back to an OS-native
+// query (see detectFromOS). This matters on Windows, whose command prompt
+// usually leaves LC_ALL/LC_MESSAGES/LANG unset, so env-only detection would
+// always return English even on a German system. Anything unresolved falls
+// back to LangEN.
 func Detect() Lang {
+	if l, ok := detectFromEnv(); ok {
+		return l
+	}
+	if l, ok := detectFromOS(); ok {
+		return l
+	}
+	return LangEN
+}
+
+// detectFromEnv inspects locale environment variables and returns the matching
+// Lang. Inspection order: LC_ALL, LC_MESSAGES, LANG. The first non-empty
+// value's two-letter ISO prefix decides the language. The bool is false when no
+// variable maps to a supported language (including "C" / "POSIX" / unset), so
+// the caller can fall back to OS-native detection.
+func detectFromEnv() (Lang, bool) {
 	for _, key := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		val := strings.TrimSpace(os.Getenv(key))
 		if val == "" {
@@ -331,12 +356,12 @@ func Detect() Lang {
 		prefix := strings.ToLower(val[:2])
 		switch prefix {
 		case "de":
-			return LangDE
+			return LangDE, true
 		case "fr":
-			return LangFR
+			return LangFR, true
 		case "en":
-			return LangEN
+			return LangEN, true
 		}
 	}
-	return LangEN
+	return LangEN, false
 }
