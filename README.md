@@ -377,7 +377,7 @@ Wenn der User die Rückfrage „Backup erstellen?" bejaht (oder `--no-prompt` De
 | Stufe | tar.xz (LZMA2) | zip (DEFLATE) | Charakter |
 |-------|----------------|---------------|-----------|
 | `min` | 1 MiB Dict, HashTable | BestSpeed | schnell, größer |
-| `default` | 8 MiB Dict, HashTable | Default | ausgewogen |
+| `default` (dt. „Standard") | 8 MiB Dict, HashTable | Default | ausgewogen |
 | `max` | 64 MiB Dict, BinaryTree (`xz -9`-Klasse) | BestCompression | kleinste Datei, **langsam, ~0,7 GB RAM** |
 
 Ohne Flag/Prompt (z. B. `--no-prompt`): **`tar.xz` / `default`**.

@@ -250,7 +250,7 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	if f.noFilesBackup {
 		wantBackup = false
 	} else {
-		wantBackup, err = prompter.Confirm(s.BackupQuestion, false)
+		wantBackup, err = prompter.Confirm(s.BackupQuestion, true)
 		if err != nil {
 			fmt.Fprintln(stderr, s.PromptError, err)
 			maybeStartService()
@@ -680,7 +680,11 @@ func resolveBackupOptions(f *flagSet, p prompt.Prompter, s i18n.Strings) (archiv
 		}
 		opts.Format = format
 	} else {
-		idx, err := p.Choose(s.BackupFormatQuestion, []string{"tar.xz", "zip"}, int(archive.FormatTarXz))
+		// Order must match the archive enum: 0=tar.xz, 1=zip.
+		idx, err := p.Choose(s.BackupFormatQuestion, []prompt.Choice{
+			{Key: "x", Label: "tar.xz"},
+			{Key: "z", Label: "zip"},
+		}, int(archive.FormatTarXz))
 		if err != nil {
 			return opts, err
 		}
@@ -694,7 +698,12 @@ func resolveBackupOptions(f *flagSet, p prompt.Prompter, s i18n.Strings) (archiv
 		}
 		opts.Level = level
 	} else {
-		idx, err := p.Choose(s.BackupLevelQuestion, []string{"min", "default", "max"}, int(archive.LevelDefault))
+		// Order must match the archive enum: 0=min, 1=default, 2=max.
+		idx, err := p.Choose(s.BackupLevelQuestion, []prompt.Choice{
+			{Key: "m", Label: "min"},
+			{Key: "s", Label: "default"},
+			{Key: "x", Label: "max"},
+		}, int(archive.LevelDefault))
 		if err != nil {
 			return opts, err
 		}

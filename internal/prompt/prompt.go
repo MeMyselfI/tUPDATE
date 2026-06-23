@@ -21,13 +21,22 @@ const (
 )
 
 // Prompter asks the user yes/no questions, three-way (yes/no/show) questions,
-// and single-choice menu questions.
+// and single-letter choice questions.
 type Prompter interface {
 	Confirm(question string, def bool) (bool, error)
 	ConfirmContinueOrShow(question string) (Answer, error)
-	// Choose presents a numbered menu and returns the selected zero-based index.
-	// Empty input selects def. Automation returns def without prompting.
-	Choose(question string, options []string, def int) (int, error)
+	// Choose presents a single-letter menu (e.g. "[X/z]") and returns the
+	// selected zero-based index. Empty input selects def. Automation returns def
+	// without prompting.
+	Choose(question string, choices []Choice, def int) (int, error)
+}
+
+// Choice is one option in a Choose menu: a single-letter Key (the accepted
+// keystroke) and a human-readable Label. The default choice is rendered with an
+// upper-cased Key in the suffix.
+type Choice struct {
+	Key   string
+	Label string
 }
 
 // Stdin is the default Prompter using stdio.
@@ -163,13 +172,13 @@ func (s *Stdin) ConfirmContinueOrShow(question string) (Answer, error) {
 	return AnswerYes, nil
 }
 
-// Choose presents the options as a numbered menu and returns the selected
-// zero-based index. The default (def) is marked and chosen on empty input.
-// Both the option number and the exact option text (case-insensitive) are
-// accepted. Invalid input is re-asked up to MaxAttempts times before falling
-// back to def.
-func (s *Stdin) Choose(question string, options []string, def int) (int, error) {
-	if def < 0 || def >= len(options) {
+// Choose prompts "<question> [X/z]: " where each choice contributes its Key,
+// the default's Key upper-cased. It returns the selected zero-based index.
+// Empty input selects def. Both the Key and the full Label are accepted
+// (case-insensitive). Invalid input is re-asked up to MaxAttempts times before
+// falling back to def.
+func (s *Stdin) Choose(question string, choices []Choice, def int) (int, error) {
+	if def < 0 || def >= len(choices) {
 		def = 0
 	}
 	attempts := s.MaxAttempts
@@ -181,17 +190,10 @@ func (s *Stdin) Choose(question string, options []string, def int) (int, error) 
 		s.reader = bufio.NewReader(s.In)
 	}
 	reader := s.reader
+	suffix := chooseSuffix(choices, def)
 
 	for i := 0; i < attempts; i++ {
-		fmt.Fprintln(s.Out, question)
-		for idx, opt := range options {
-			marker := " "
-			if idx == def {
-				marker = "*"
-			}
-			fmt.Fprintf(s.Out, "  %s %d) %s\n", marker, idx+1, opt)
-		}
-		if _, err := fmt.Fprintf(s.Out, "[%d]: ", def+1); err != nil {
+		if _, err := fmt.Fprintf(s.Out, "%s [%s]: ", question, suffix); err != nil {
 			return def, err
 		}
 		line, err := reader.ReadString('\n')
@@ -202,7 +204,7 @@ func (s *Stdin) Choose(question string, options []string, def int) (int, error) 
 		if answer == "" {
 			return def, nil
 		}
-		if idx, ok := matchChoice(answer, options); ok {
+		if idx, ok := matchChoice(answer, choices); ok {
 			return idx, nil
 		}
 		if err == io.EOF {
@@ -213,14 +215,25 @@ func (s *Stdin) Choose(question string, options []string, def int) (int, error) 
 	return def, nil
 }
 
-// matchChoice resolves a trimmed, lower-cased answer to an option index by
-// 1-based number or exact (case-insensitive) option text.
-func matchChoice(answer string, options []string) (int, bool) {
-	for idx, opt := range options {
-		if answer == strings.ToLower(opt) {
-			return idx, true
+// chooseSuffix renders the key list, upper-casing the default's key, e.g.
+// "X/z" or "m/S/x".
+func chooseSuffix(choices []Choice, def int) string {
+	parts := make([]string, len(choices))
+	for i, c := range choices {
+		if i == def {
+			parts[i] = strings.ToUpper(c.Key)
+		} else {
+			parts[i] = strings.ToLower(c.Key)
 		}
-		if answer == fmt.Sprintf("%d", idx+1) {
+	}
+	return strings.Join(parts, "/")
+}
+
+// matchChoice resolves a trimmed, lower-cased answer to a choice index by its
+// Key or full Label (both case-insensitive).
+func matchChoice(answer string, choices []Choice) (int, bool) {
+	for idx, c := range choices {
+		if answer == strings.ToLower(c.Key) || answer == strings.ToLower(c.Label) {
 			return idx, true
 		}
 	}
@@ -284,6 +297,6 @@ func (a Always) ConfirmContinueOrShow(string) (Answer, error) {
 
 // Choose returns the default index without prompting, so automation uses the
 // caller-supplied default selection.
-func (a Always) Choose(_ string, _ []string, def int) (int, error) {
+func (a Always) Choose(_ string, _ []Choice, def int) (int, error) {
 	return def, nil
 }

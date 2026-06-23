@@ -41,8 +41,8 @@ func TestResolveBackupOptions_InvalidFlag(t *testing.T) {
 }
 
 func TestResolveBackupOptions_InteractiveChoose(t *testing.T) {
-	// Menu order: format [tar.xz, zip] -> "2"=zip; level [min, default, max] -> "3"=max.
-	p := &prompt.Stdin{In: strings.NewReader("2\n3\n"), Out: io.Discard, MaxAttempts: 3}
+	// Letter menu: format [X/z] -> "z"=zip; level [m/S/x] -> "x"=max.
+	p := &prompt.Stdin{In: strings.NewReader("z\nx\n"), Out: io.Discard, MaxAttempts: 3}
 	opts, err := resolveBackupOptions(&flagSet{}, p, i18n.Get(i18n.LangEN))
 	if err != nil {
 		t.Fatal(err)

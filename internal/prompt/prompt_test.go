@@ -15,9 +15,12 @@ func newStdin(input string) (*Stdin, *bytes.Buffer) {
 	}, out
 }
 
+var fmtChoices = []Choice{{Key: "x", Label: "tar.xz"}, {Key: "z", Label: "zip"}}
+var lvlChoices = []Choice{{Key: "m", Label: "min"}, {Key: "s", Label: "default"}, {Key: "x", Label: "max"}}
+
 func TestChoose_EmptyUsesDefault(t *testing.T) {
 	p, _ := newStdin("\n")
-	idx, err := p.Choose("format?", []string{"tar.xz", "zip"}, 0)
+	idx, err := p.Choose("format?", fmtChoices, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,9 +29,9 @@ func TestChoose_EmptyUsesDefault(t *testing.T) {
 	}
 }
 
-func TestChoose_ByNumber(t *testing.T) {
-	p, _ := newStdin("2\n")
-	idx, err := p.Choose("format?", []string{"tar.xz", "zip"}, 0)
+func TestChoose_ByKey(t *testing.T) {
+	p, _ := newStdin("z\n")
+	idx, err := p.Choose("format?", fmtChoices, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,9 +40,9 @@ func TestChoose_ByNumber(t *testing.T) {
 	}
 }
 
-func TestChoose_ByText(t *testing.T) {
+func TestChoose_ByLabel(t *testing.T) {
 	p, _ := newStdin("MAX\n")
-	idx, err := p.Choose("level?", []string{"min", "default", "max"}, 1)
+	idx, err := p.Choose("level?", lvlChoices, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,17 +51,27 @@ func TestChoose_ByText(t *testing.T) {
 	}
 }
 
+func TestChoose_SuffixMarksDefaultUpper(t *testing.T) {
+	p, out := newStdin("\n")
+	if _, err := p.Choose("level?", lvlChoices, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "[m/S/x]") {
+		t.Errorf("suffix should mark default with upper-case key: %q", out.String())
+	}
+}
+
 func TestChoose_ReAsksOnInvalidThenDefault(t *testing.T) {
 	p, out := newStdin("nope\n\n")
-	idx, err := p.Choose("level?", []string{"min", "default", "max"}, 1)
+	idx, err := p.Choose("level?", lvlChoices, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if idx != 1 {
 		t.Errorf("idx = %d, want 1 (default after empty)", idx)
 	}
-	if !strings.Contains(out.String(), "min") {
-		t.Error("menu options should be printed")
+	if !strings.Contains(out.String(), "level?") {
+		t.Error("question should be printed")
 	}
 }
 

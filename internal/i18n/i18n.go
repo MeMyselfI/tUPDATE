@@ -141,8 +141,8 @@ var en = Strings{
 	ReportNoDirs:    "(no directories)",
 
 	BackupQuestion:               "Create backup of current directories?",
-	BackupFormatQuestion:         "Which backup format? (tar.xz = smaller, zip = faster/universal)",
-	BackupLevelQuestion:          "Which compression level? (min = fast, max = smallest but slow)",
+	BackupFormatQuestion:         "Which backup format? x=tar.xz (smaller), z=zip (faster/universal)",
+	BackupLevelQuestion:          "Which compression level? m=min, s=default, x=max",
 	BackupCreating:               "Creating backup...",
 	BackupLabel:                  "Backup:",
 	BackupError:                  "Backup error:",
@@ -208,8 +208,8 @@ var de = Strings{
 	ReportNoDirs:    "(keine Verzeichnisse)",
 
 	BackupQuestion:               "Backup der aktuellen Verzeichnisse erstellen?",
-	BackupFormatQuestion:         "Welches Backup-Format? (tar.xz = kleiner, zip = schneller/universell)",
-	BackupLevelQuestion:          "Welche Kompressionsstufe? (min = schnell, max = kleinste aber langsam)",
+	BackupFormatQuestion:         "Welches Backup-Format? x=tar.xz (kleiner), z=ZIP (schneller/universell)",
+	BackupLevelQuestion:          "Welche Kompressionsstufe? m=min, S=Standard, x=max",
 	BackupCreating:               "Backup wird erstellt...",
 	BackupLabel:                  "Backup:",
 	BackupError:                  "Backup-Fehler:",
@@ -275,8 +275,8 @@ var fr = Strings{
 	ReportNoDirs:    "(aucun répertoire)",
 
 	BackupQuestion:               "Créer une sauvegarde des répertoires actuels ?",
-	BackupFormatQuestion:         "Quel format de sauvegarde ? (tar.xz = plus petit, zip = plus rapide/universel)",
-	BackupLevelQuestion:          "Quel niveau de compression ? (min = rapide, max = plus petit mais lent)",
+	BackupFormatQuestion:         "Quel format de sauvegarde ? x=tar.xz (plus petit), z=zip (plus rapide/universel)",
+	BackupLevelQuestion:          "Quel niveau de compression ? m=min, s=standard, x=max",
 	BackupCreating:               "Création de la sauvegarde...",
 	BackupLabel:                  "Sauvegarde :",
 	BackupError:                  "Erreur de sauvegarde :",
