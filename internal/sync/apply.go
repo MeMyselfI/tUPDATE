@@ -14,9 +14,15 @@ import (
 //
 // On the first error the function returns; partial application is possible — callers
 // should report the backup path so the user can roll back manually.
-func Apply(refRoot, liveRoot string, diffs []DirDiff) error {
+//
+// If onFile is non-nil it is called with the "dir/path" of each entry just
+// before it is applied, so callers can show live progress.
+func Apply(refRoot, liveRoot string, diffs []DirDiff, onFile func(name string)) error {
 	for _, d := range diffs {
 		for _, c := range d.Changes {
+			if onFile != nil {
+				onFile(d.Dir + "/" + c.Path)
+			}
 			switch c.Type {
 			case Added, Modified:
 				if err := copyFile(

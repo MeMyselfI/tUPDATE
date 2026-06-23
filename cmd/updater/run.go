@@ -333,7 +333,12 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	}
 
 	fmt.Fprintln(stderr, s.ApplyingUpdate)
-	if err := sync.Apply(refRoot, appRoot, diffs); err != nil {
+	tick := applyTicker(f)
+	err = sync.Apply(refRoot, appRoot, diffs, tick)
+	if tick != nil {
+		fmt.Fprintln(os.Stderr) // finish the single-line ticker
+	}
+	if err != nil {
 		fmt.Fprintln(stderr, s.SyncError, err)
 		emit.ApplyFailed(err.Error())
 		if backupPath != "" {
@@ -403,6 +408,29 @@ func ttyProgress(f *flagSet) archive.Progress {
 		if done >= total {
 			fmt.Fprintln(os.Stderr)
 		}
+	}
+}
+
+// applyTicker returns a per-file callback for sync.Apply that streams the
+// current path on a single carriage-return line on the real console. Disabled
+// (nil) under --json, --detach, or a non-terminal stderr. Lightly throttled so
+// huge diffs don't flood the terminal.
+func applyTicker(f *flagSet) func(string) {
+	if f.jsonOut || f.detach || !isTerminal(os.Stderr) {
+		return nil
+	}
+	var last time.Time
+	return func(name string) {
+		now := time.Now()
+		if now.Sub(last) < 16*time.Millisecond {
+			return
+		}
+		last = now
+		const w = 64
+		if len(name) > w {
+			name = "..." + name[len(name)-(w-3):]
+		}
+		fmt.Fprintf(os.Stderr, "\r  %-*s", w, name)
 	}
 }
 

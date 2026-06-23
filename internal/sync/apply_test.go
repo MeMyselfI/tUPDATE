@@ -14,7 +14,7 @@ func TestApply_AddedFileCreated(t *testing.T) {
 	writeFile(t, filepath.Join(ref, "bin", "new.sh"), "#!/bin/sh\nnew\n")
 
 	diff := []DirDiff{{Dir: "bin", Changes: []Change{{Path: "new.sh", Type: Added}}}}
-	if err := Apply(ref, live, diff); err != nil {
+	if err := Apply(ref, live, diff, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -35,7 +35,7 @@ func TestApply_ModifiedFileOverwritten(t *testing.T) {
 	writeFile(t, filepath.Join(live, "etc", "config.txt"), "OLD")
 
 	diff := []DirDiff{{Dir: "etc", Changes: []Change{{Path: "config.txt", Type: Modified}}}}
-	if err := Apply(ref, live, diff); err != nil {
+	if err := Apply(ref, live, diff, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestApply_RemovedFileDeleted(t *testing.T) {
 	writeFile(t, filepath.Join(live, "etc", "stale.cfg"), "x")
 
 	diff := []DirDiff{{Dir: "etc", Changes: []Change{{Path: "stale.cfg", Type: Removed}}}}
-	if err := Apply(ref, live, diff); err != nil {
+	if err := Apply(ref, live, diff, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -75,7 +75,7 @@ func TestApply_PreservesModeBits(t *testing.T) {
 	}
 
 	diff := []DirDiff{{Dir: "bin", Changes: []Change{{Path: "exec.sh", Type: Added}}}}
-	if err := Apply(ref, live, diff); err != nil {
+	if err := Apply(ref, live, diff, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	info, err := os.Stat(filepath.Join(live, "bin", "exec.sh"))
@@ -93,7 +93,7 @@ func TestApply_RemovesEmptyParentDirs(t *testing.T) {
 	writeFile(t, filepath.Join(live, "etc", "a", "b", "lonely.txt"), "x")
 
 	diff := []DirDiff{{Dir: "etc", Changes: []Change{{Path: "a/b/lonely.txt", Type: Removed}}}}
-	if err := Apply(filepath.Join(tmp, "ref"), live, diff); err != nil {
+	if err := Apply(filepath.Join(tmp, "ref"), live, diff, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	for _, p := range []string{"etc/a/b", "etc/a"} {
@@ -110,7 +110,7 @@ func TestApply_RemovesEmptyParentDirs(t *testing.T) {
 func TestApply_RemovingMissingFileIsNoOp(t *testing.T) {
 	tmp := t.TempDir()
 	diff := []DirDiff{{Dir: "etc", Changes: []Change{{Path: "ghost.txt", Type: Removed}}}}
-	if err := Apply(filepath.Join(tmp, "ref"), filepath.Join(tmp, "live"), diff); err != nil {
+	if err := Apply(filepath.Join(tmp, "ref"), filepath.Join(tmp, "live"), diff, nil); err != nil {
 		t.Errorf("Apply should ignore missing file: %v", err)
 	}
 }
@@ -129,7 +129,7 @@ func TestApply_AppliesAcrossMultipleDirs(t *testing.T) {
 		{Dir: "www", Changes: []Change{{Path: "i.html", Type: Modified}}},
 		{Dir: "libs", Changes: []Change{{Path: "old.jar", Type: Removed}}},
 	}
-	if err := Apply(ref, live, diffs); err != nil {
+	if err := Apply(ref, live, diffs, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	cases := map[string]string{
@@ -148,5 +148,25 @@ func TestApply_AppliesAcrossMultipleDirs(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(live, "libs", "old.jar")); !os.IsNotExist(err) {
 		t.Errorf("libs/old.jar should be removed")
+	}
+}
+
+func TestApply_OnFileCallback(t *testing.T) {
+	tmp := t.TempDir()
+	ref := filepath.Join(tmp, "ref")
+	live := filepath.Join(tmp, "live")
+	writeFile(t, filepath.Join(ref, "bin", "a.sh"), "a")
+	writeFile(t, filepath.Join(live, "bin", "old.sh"), "old")
+
+	diff := []DirDiff{{Dir: "bin", Changes: []Change{
+		{Path: "a.sh", Type: Added},
+		{Path: "old.sh", Type: Removed},
+	}}}
+	var seen []string
+	if err := Apply(ref, live, diff, func(n string) { seen = append(seen, n) }); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(seen) != 2 || seen[0] != "bin/a.sh" || seen[1] != "bin/old.sh" {
+		t.Errorf("onFile names = %v, want [bin/a.sh bin/old.sh]", seen)
 	}
 }
