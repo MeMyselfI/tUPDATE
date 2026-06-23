@@ -7,6 +7,7 @@ PKG      = ./cmd/updater
 DIST     = dist
 
 SYSO_DIR = cmd/updater
+ICON = $(SYSO_DIR)/icon.ico
 SYSO_FILES = \
   $(SYSO_DIR)/resource_windows_386.syso \
   $(SYSO_DIR)/resource_windows_amd64.syso \
@@ -28,7 +29,7 @@ ALL_TARGETS = \
   $(DIST)/updater-darwin-arm64 \
   $(DIST)/updater-darwin-universal
 
-.PHONY: all build-all test vet fmt clean upx-all windows-manifest help
+.PHONY: all build-all test vet fmt clean upx-all windows-manifest icon help
 
 all: build-all
 
@@ -37,7 +38,8 @@ help:
 	@echo "make test             Run go test ./..."
 	@echo "make vet              Run go vet ./..."
 	@echo "make fmt              Run gofmt -l (lists files needing fmt)"
-	@echo "make windows-manifest Regenerate cmd/updater/resource_windows_*.syso"
+	@echo "make icon             Regenerate cmd/updater/icon.ico from tools/mkicon"
+	@echo "make windows-manifest Regenerate cmd/updater/resource_windows_*.syso (embeds icon)"
 	@echo "make upx-all          UPX-pack windows + linux binaries (skips darwin)"
 	@echo "make clean            Remove dist/"
 
@@ -56,9 +58,14 @@ fmt:
 clean:
 	rm -rf $(DIST)
 
+icon: $(ICON)
+
+$(ICON): tools/mkicon/main.go
+	$(GO) run ./tools/mkicon -ico $(ICON)
+
 windows-manifest: $(SYSO_FILES)
 
-$(SYSO_FILES): $(SYSO_DIR)/versioninfo.json $(SYSO_DIR)/manifest.xml
+$(SYSO_FILES): $(SYSO_DIR)/versioninfo.json $(SYSO_DIR)/manifest.xml $(ICON)
 	cd $(SYSO_DIR) && $(GO) run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest \
 	    -64=true -platform-specific=true versioninfo.json
 
