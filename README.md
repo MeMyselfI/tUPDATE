@@ -223,6 +223,7 @@ Beispielausgabe (Java-Aufruf, `--no-files-backup --no-db-backup`):
 | `backup_dir_writable` | `<app-root>/<backup.directory>` wird ggf. angelegt, Probe-Datei geschrieben + sofort gelöscht | **ja** |
 | `service_stop_binary` | erstes Token aus `service.stop.<os>` (z.B. `launchctl`, `systemctl`, `net`) muss auf PATH sein. Skipped mit `--skip-service` | **ja** |
 | `service_start_binary` | dito für `service.start.<os>` | **ja** |
+| `service_running` | ob der Service tatsächlich **läuft** (nicht nur, ob das Control-Binary da ist). Service-Name aus dem letzten Token von `service.stop.<os>`, Status via `launchctl list` / `systemctl is-active` / `sc query`. Skipped mit `--skip-service`. Befund nicht eindeutig (unbekannter Manager, Status-Tool fehlt, Output nicht parsebar, Timeout) ⇒ `ok:true` | nein |
 | `pgdump_binary` | `pgdump.path.<os>` ODER `exec.LookPath("pg_dump")`. Skipped mit `--no-db-backup` | **ja** |
 | `pgdump_conn_host` | `pgdump.host` ODER `PGHOST`-Env (informational; libpq fällt auf unix socket / localhost zurück) | nein |
 | `pgdump_conn_database` | `pgdump.db` ODER `PGDATABASE`-Env | **ja** |
@@ -239,6 +240,7 @@ Ausgabe (Human-Modus):
 Check backup_dir_writable: OK (/opt/myapp/backup)
 Check service_stop_binary: OK (/bin/launchctl)
 Check service_start_binary: OK (/bin/launchctl)
+Check service_running: OK (running (launchctl reports a PID))
 Check pgdump_binary: OK (/opt/homebrew/bin/pg_dump)
 Check pgdump_conn_host: OK (set via pgdump.host)
 Check pgdump_conn_database: OK (set via pgdump.db)

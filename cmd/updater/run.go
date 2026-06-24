@@ -496,6 +496,13 @@ func runDryRunChecks(cfg *config.Config, appRoot string, f *flagSet, emit *machi
 
 		startOK, startDetail := probeServiceBinary(cfg.StartCommand(runtime.GOOS))
 		runCheck("service_start_binary", true, startOK, startDetail)
+
+		// Whether the service is actually running — informational, never fatal.
+		// An inconclusive result (unknown service manager, status tool absent,
+		// unparseable output, timeout) reports ok=true so a "couldn't tell"
+		// never blocks dry-run; only a clear "stopped" reports ok=false.
+		runOK, runDetail := probeServiceRunning(runtime.GOOS, cfg.StopCommand(runtime.GOOS))
+		runCheck("service_running", false, runOK, runDetail)
 	}
 
 	// 3. pg_dump binary + connection params (skip when --no-db-backup).
@@ -558,6 +565,160 @@ func probeServiceBinary(cmd string) (bool, string) {
 		return false, bin + ": not found on PATH"
 	}
 	return true, path
+}
+
+// probeServiceRunning is the complement to probeServiceBinary: the latter only
+// proves the control binary (launchctl / systemctl / sc) is callable; this one
+// tries to learn whether the managed service is actually running, so a dry-run
+// can warn that the live update has nothing to stop.
+//
+// It is deliberately best-effort. The service identifier is parsed from the
+// configured service.stop command (last token, e.g. "tosce" / "tOSCE-Server"),
+// and a read-only status query is run for the recognised managers. Anything we
+// cannot determine — an unknown manager, a missing status tool, unparseable
+// output, or a timeout — returns ok=true so an inconclusive probe never blocks
+// dry-run. Only a clearly stopped/absent service returns ok=false.
+func probeServiceRunning(goos, stopCmd string) (bool, string) {
+	manager, id := parseServiceTarget(stopCmd)
+	if manager == "" || id == "" {
+		return true, "inconclusive: cannot derive service from stop command"
+	}
+
+	statusBin := manager
+	if manager == "net" {
+		// net has no machine-readable per-service query; sc query does.
+		statusBin = "sc"
+	}
+	if _, err := exec.LookPath(statusBin); err != nil {
+		return true, "inconclusive: " + statusBin + " not on PATH (skipped)"
+	}
+
+	var args []string
+	switch manager {
+	case "launchctl":
+		args = []string{"list", id}
+	case "systemctl":
+		args = []string{"is-active", id}
+	case "net", "sc":
+		args = []string{"query", id}
+	default:
+		return true, "inconclusive: unsupported service manager " + manager
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+	defer cancel()
+	out, runErr := exec.CommandContext(ctx, statusBin, args...).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return true, "inconclusive: " + statusBin + " status query timed out"
+	}
+	text := strings.TrimSpace(string(out))
+
+	switch manager {
+	case "launchctl":
+		return interpretLaunchctl(text, runErr)
+	case "systemctl":
+		return interpretSystemctl(text)
+	default: // net / sc
+		return interpretSc(text, runErr)
+	}
+}
+
+// parseServiceTarget extracts the service manager and the service identifier
+// from a configured service.stop command. The manager is the basename of the
+// first token; the identifier is the last token (the conventional position for
+// the unit/label/service name across launchctl, systemctl and net/sc). A
+// leading-dash last token (a flag) or an unrecognised manager yields empties so
+// the caller reports the probe inconclusive.
+func parseServiceTarget(stopCmd string) (manager, id string) {
+	fields := strings.Fields(strings.TrimSpace(stopCmd))
+	if len(fields) < 2 {
+		return "", ""
+	}
+	bin := strings.ToLower(strings.TrimSuffix(commandBasename(fields[0]), ".exe"))
+	switch bin {
+	case "launchctl", "systemctl", "net", "sc":
+		manager = bin
+	default:
+		return "", ""
+	}
+	id = strings.Trim(fields[len(fields)-1], `"'`)
+	if id == "" || strings.HasPrefix(id, "-") {
+		return "", ""
+	}
+	return manager, id
+}
+
+// commandBasename strips any directory prefix from the first token of a service
+// command. Unlike filepath.Base it recognises both '/' and '\' regardless of
+// the host OS, because the configured command targets the deployment OS (which
+// may differ from the build/test host).
+func commandBasename(path string) string {
+	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+// interpretLaunchctl maps `launchctl list <label>` output to a running verdict.
+// A non-zero exit means the label is not loaded → not running. When loaded, the
+// printed dict carries a "PID" key only while the job has a live process.
+func interpretLaunchctl(out string, runErr error) (bool, string) {
+	if runErr != nil {
+		return false, "not running (launchctl: label not loaded)"
+	}
+	if strings.Contains(out, "\"PID\"") || strings.Contains(out, "PID =") {
+		return true, "running (launchctl reports a PID)"
+	}
+	if strings.Contains(out, "{") {
+		return false, "not running (launchctl: loaded, no PID)"
+	}
+	return true, "inconclusive: unparseable launchctl output"
+}
+
+// interpretSystemctl maps `systemctl is-active <unit>` stdout to a verdict.
+// The exit code is intentionally ignored: is-active exits non-zero whenever the
+// unit isn't active, so the textual state is the reliable signal.
+func interpretSystemctl(out string) (bool, string) {
+	state := strings.TrimSpace(out)
+	// is-active can print multiple lines for templated/multiple units; the
+	// first word is the state of interest.
+	if nl := strings.IndexAny(state, " \r\n"); nl >= 0 {
+		state = state[:nl]
+	}
+	switch state {
+	case "active", "activating", "reloading":
+		return true, "running (systemctl: " + state + ")"
+	case "inactive", "failed", "deactivating":
+		return false, "not running (systemctl: " + state + ")"
+	default:
+		return true, "inconclusive: systemctl state " + quoteOrEmpty(state)
+	}
+}
+
+// interpretSc maps `sc query <name>` output to a verdict. The STATE line reads
+// e.g. "STATE : 4  RUNNING". A non-zero exit is usually a missing service
+// (error 1060) → not running.
+func interpretSc(out string, runErr error) (bool, string) {
+	upper := strings.ToUpper(out)
+	switch {
+	case strings.Contains(upper, "RUNNING"), strings.Contains(upper, "START_PENDING"):
+		return true, "running (sc: RUNNING)"
+	case strings.Contains(upper, "STOPPED"), strings.Contains(upper, "STOP_PENDING"):
+		return false, "not running (sc: STOPPED)"
+	case runErr != nil && (strings.Contains(upper, "1060") || strings.Contains(upper, "DOES NOT EXIST")):
+		return false, "not running (sc: service not found)"
+	default:
+		return true, "inconclusive: unparseable sc output"
+	}
+}
+
+// quoteOrEmpty renders an sc/systemctl state string for a detail message,
+// distinguishing an empty value from a present-but-unknown one.
+func quoteOrEmpty(s string) string {
+	if s == "" {
+		return "(empty)"
+	}
+	return "\"" + s + "\""
 }
 
 // probePgdumpString reports whether a libpq value is set by the conf-key, by
@@ -884,6 +1045,8 @@ DRY-RUN-CHECKS
                              backup_dir_writable      (fatal)
                              service_stop_binary      (fatal, skipped mit --skip-service)
                              service_start_binary     (fatal, skipped mit --skip-service)
+                             service_running          (informational, via launchctl/
+                                                       systemctl/sc; unklar => ok)
                              pgdump_binary            (fatal, skipped mit --no-db-backup)
                              pgdump_conn_host         (informational)
                              pgdump_conn_database     (fatal)
