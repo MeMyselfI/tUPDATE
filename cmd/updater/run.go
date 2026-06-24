@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -589,38 +590,82 @@ func probeServiceRunning(goos, stopCmd string) (bool, string) {
 		// net has no machine-readable per-service query; sc query does.
 		statusBin = "sc"
 	}
-	if _, err := exec.LookPath(statusBin); err != nil {
+	binPath, err := exec.LookPath(statusBin)
+	if err != nil {
 		return true, "inconclusive: " + statusBin + " not on PATH (skipped)"
 	}
 
-	var args []string
 	switch manager {
 	case "launchctl":
-		args = []string{"list", id}
+		out, runErr, timedOut := runStatusCmd(binPath, "list", id)
+		if timedOut {
+			return true, "inconclusive: launchctl status query timed out"
+		}
+		return interpretLaunchctl(out, runErr)
 	case "systemctl":
-		args = []string{"is-active", id}
+		out, _, timedOut := runStatusCmd(binPath, "is-active", id)
+		if timedOut {
+			return true, "inconclusive: systemctl status query timed out"
+		}
+		return interpretSystemctl(out)
 	case "net", "sc":
-		args = []string{"query", id}
+		return probeWindowsServiceRunning(binPath, id)
 	default:
 		return true, "inconclusive: unsupported service manager " + manager
 	}
+}
 
+// runStatusCmd runs a read-only status command with a short timeout. timedOut
+// is reported separately so callers can mark the probe inconclusive instead of
+// misreading a slow/hung status tool as a definitive "not running".
+func runStatusCmd(bin string, args ...string) (out string, err error, timedOut bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 	defer cancel()
-	out, runErr := exec.CommandContext(ctx, statusBin, args...).CombinedOutput()
+	b, e := exec.CommandContext(ctx, bin, args...).CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		return true, "inconclusive: " + statusBin + " status query timed out"
+		return "", e, true
 	}
-	text := strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(b)), e, false
+}
 
-	switch manager {
-	case "launchctl":
-		return interpretLaunchctl(text, runErr)
-	case "systemctl":
-		return interpretSystemctl(text)
-	default: // net / sc
-		return interpretSc(text, runErr)
+// probeWindowsServiceRunning resolves a Windows service's run state via sc.
+// `net start`/`net stop` accept either the service key name or the display
+// name, but `sc query` only understands the key name. So when the first query
+// reports the service does not exist (error 1060) we treat id as a display
+// name, resolve it to the key name with `sc getkeyname`, and query again.
+func probeWindowsServiceRunning(scPath, id string) (bool, string) {
+	out, runErr, timedOut := runStatusCmd(scPath, "query", id)
+	if timedOut {
+		return true, "inconclusive: sc status query timed out"
 	}
+	if classifySc(out, runErr) != scNotFound {
+		return interpretSc(out, runErr)
+	}
+
+	// id may be a display name; resolve it to the service key name and retry.
+	key := scResolveKeyName(scPath, id)
+	if key == "" || strings.EqualFold(key, id) {
+		return interpretSc(out, runErr) // genuinely not installed under that name
+	}
+	out2, runErr2, timedOut2 := runStatusCmd(scPath, "query", key)
+	if timedOut2 {
+		return true, "inconclusive: sc status query timed out"
+	}
+	if classifySc(out2, runErr2) == scNotFound {
+		return interpretSc(out, runErr)
+	}
+	ok, detail := interpretSc(out2, runErr2)
+	return ok, detail + " (display name " + id + " -> service " + key + ")"
+}
+
+// scResolveKeyName runs `sc getkeyname <displayName>` and returns the resolved
+// service key name, or "" if the lookup failed.
+func scResolveKeyName(scPath, displayName string) string {
+	out, err, timedOut := runStatusCmd(scPath, "getkeyname", displayName)
+	if err != nil || timedOut {
+		return ""
+	}
+	return parseScKeyName(out)
 }
 
 // parseServiceTarget extracts the service manager and the service identifier
@@ -695,21 +740,79 @@ func interpretSystemctl(out string) (bool, string) {
 	}
 }
 
-// interpretSc maps `sc query <name>` output to a verdict. The STATE line reads
-// e.g. "STATE : 4  RUNNING". A non-zero exit is usually a missing service
-// (error 1060) → not running.
-func interpretSc(out string, runErr error) (bool, string) {
+// scState is the run-state classification derived from `sc query` output.
+type scState int
+
+const (
+	scUnknown scState = iota
+	scRunning
+	scStopped
+	scNotFound
+)
+
+// scStateCodeRe matches the locale-independent numeric service state on the
+// STATE/ZUSTAND line of `sc query` output, e.g. ": 4  RUNNING". The trailing
+// state word is localized on non-English Windows, but the 1..7 code is not. The
+// \b after the digit keeps multi-digit fields (TYPE ": 10", PID ": 1234") from
+// matching.
+var scStateCodeRe = regexp.MustCompile(`:\s*([1-7])\b`)
+
+// classifySc reduces `sc query` output (and its exit error) to an scState. The
+// numeric state code is preferred so the check also works on localized Windows;
+// English keywords are a fallback, and error 1060 / "does not exist" marks a
+// service that is not installed under the queried name.
+func classifySc(out string, runErr error) scState {
+	if m := scStateCodeRe.FindStringSubmatch(out); m != nil {
+		switch m[1] {
+		case "4", "2", "5": // RUNNING, START_PENDING, CONTINUE_PENDING
+			return scRunning
+		case "1", "3": // STOPPED, STOP_PENDING
+			return scStopped
+		}
+		// 6 PAUSE_PENDING / 7 PAUSED: ambiguous → fall through to keyword/unknown.
+	}
 	upper := strings.ToUpper(out)
 	switch {
 	case strings.Contains(upper, "RUNNING"), strings.Contains(upper, "START_PENDING"):
-		return true, "running (sc: RUNNING)"
+		return scRunning
 	case strings.Contains(upper, "STOPPED"), strings.Contains(upper, "STOP_PENDING"):
-		return false, "not running (sc: STOPPED)"
+		return scStopped
 	case runErr != nil && (strings.Contains(upper, "1060") || strings.Contains(upper, "DOES NOT EXIST")):
+		return scNotFound
+	}
+	return scUnknown
+}
+
+// interpretSc maps an sc classification to a (ok, detail) verdict. A missing
+// service is a clear "not running"; an unrecognised output is inconclusive
+// (ok=true) so a parsing gap never blocks dry-run.
+func interpretSc(out string, runErr error) (bool, string) {
+	switch classifySc(out, runErr) {
+	case scRunning:
+		return true, "running (sc: state RUNNING)"
+	case scStopped:
+		return false, "not running (sc: state STOPPED)"
+	case scNotFound:
 		return false, "not running (sc: service not found)"
 	default:
 		return true, "inconclusive: unparseable sc output"
 	}
+}
+
+// parseScKeyName extracts the service key name from `sc getkeyname` output. The
+// success form prints "Name = <key>"; we take the value after '=' on the first
+// non-header line so the parse survives a localized "Name" label.
+func parseScKeyName(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "[SC]") {
+			continue
+		}
+		if i := strings.IndexByte(line, '='); i >= 0 {
+			return strings.TrimSpace(line[i+1:])
+		}
+	}
+	return ""
 }
 
 // quoteOrEmpty renders an sc/systemctl state string for a detail message,

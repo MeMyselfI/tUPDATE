@@ -102,6 +102,13 @@ func TestInterpretSc(t *testing.T) {
 		{"start pending", "        STATE              : 2  START_PENDING", nil, true, "running"},
 		{"not found", "[SC] EnumQueryServicesStatus:OpenService FAILED 1060:", errors.New("exit 1"), false, "not found"},
 		{"garbage", "???", nil, true, "inconclusive"},
+		// German Windows: state words are localized, the numeric code is not.
+		{"german running", "        ZUSTAND            : 4  WIRD AUSGEFÜHRT", nil, true, "running"},
+		{"german stopped", "        ZUSTAND            : 1  BEENDET", nil, false, "not running"},
+		// PID / TYPE numbers on other lines must not be mistaken for a state.
+		{"only pid line", "        PROCESS_ID         : 1234", nil, true, "inconclusive"},
+		// paused (7) is ambiguous → inconclusive, not a false "stopped".
+		{"paused", "        STATE              : 7  PAUSED", nil, true, "inconclusive"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,6 +116,27 @@ func TestInterpretSc(t *testing.T) {
 			if ok != tc.wantOK || !strings.Contains(detail, tc.wantSub) {
 				t.Errorf("interpretSc = (%v, %q), want ok=%v containing %q",
 					ok, detail, tc.wantOK, tc.wantSub)
+			}
+		})
+	}
+}
+
+func TestParseScKeyName(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{"english success", "[SC] GetServiceKeyName SUCCESS\n\nName = tEXAMServer\n", "tEXAMServer"},
+		{"german success", "[SC] GetServiceKeyName ERFOLG\nName = tEXAMServer", "tEXAMServer"},
+		{"no spaces around eq", "Name=tEXAMServer", "tEXAMServer"},
+		{"failure header only", "[SC] GetServiceKeyName FAILED 1060:", ""},
+		{"empty", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseScKeyName(tc.out); got != tc.want {
+				t.Errorf("parseScKeyName(%q) = %q, want %q", tc.out, got, tc.want)
 			}
 		})
 	}
