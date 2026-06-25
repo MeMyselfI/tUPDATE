@@ -1,7 +1,7 @@
 # tUPDATE — Projekt-Handoff & Arbeitsanleitung
 
 Dieses Dokument ist self-contained: Es reicht allein, um die Arbeit am Projekt fortzusetzen.
-Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.9.3** (2026-06-23).
+Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.9.4** (2026-06-25).
 
 ---
 
@@ -105,6 +105,7 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 
 ## 7. Versionshistorie (Kurz)
 
+- **0.9.4** Service-Stop/-Start: Erfolg wird im Log bestätigt (`Service gestoppt.` / `Service gestartet.`).
 - **0.9.3** Apply: Dateipfade in einer `\r`-Zeile.
 - **0.9.2** Windows-`.exe` App-Icon (Refresh-Doppelpfeil, blau) via `tools/mkicon`.
 - **0.9.1** Buchstaben-Prompts `[X/z]`/`[m/S/x]`; Backup-Default Ja; DE „Standard".

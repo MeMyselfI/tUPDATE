@@ -186,6 +186,8 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 		defer cancel()
 		if err := runner.Run(startCtx, startCmd, time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second); err != nil {
 			fmt.Fprintln(stderr, s.ServiceStartError, err)
+		} else {
+			fmt.Fprintln(stderr, s.ServiceStarted)
 		}
 	}
 
@@ -205,6 +207,7 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 			}
 			serviceWasStopped = false
 		} else {
+			fmt.Fprintln(stderr, s.ServiceStopped)
 			emit.ServiceStopOK()
 			serviceWasStopped = true
 		}
@@ -364,6 +367,7 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 				return exitServiceStart
 			}
 		} else {
+			fmt.Fprintln(stderr, s.ServiceStarted)
 			emit.ServiceStartOK()
 		}
 	}

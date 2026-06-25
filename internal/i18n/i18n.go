@@ -59,8 +59,10 @@ type Strings struct {
 	// Service
 	ServiceStopping   string // "Stopping service:"
 	ServiceStopError  string
+	ServiceStopped    string // "Service stopped."
 	ServiceStarting   string // "Starting service:"
 	ServiceStartError string
+	ServiceStarted    string // "Service started."
 
 	// Diff
 	ComputingDiff   string
@@ -129,8 +131,10 @@ var en = Strings{
 
 	ServiceStopping:   "Stopping service:",
 	ServiceStopError:  "Service stop error:",
+	ServiceStopped:    "Service stopped.",
 	ServiceStarting:   "Starting service:",
 	ServiceStartError: "Service start error:",
+	ServiceStarted:    "Service started.",
 
 	ComputingDiff:   "Computing diff...",
 	DiffError:       "Diff error:",
@@ -196,8 +200,10 @@ var de = Strings{
 
 	ServiceStopping:   "Service stoppen:",
 	ServiceStopError:  "Service-Stop-Fehler:",
+	ServiceStopped:    "Service gestoppt.",
 	ServiceStarting:   "Service starten:",
 	ServiceStartError: "Service-Start-Fehler:",
+	ServiceStarted:    "Service gestartet.",
 
 	ComputingDiff:   "Diff berechnen...",
 	DiffError:       "Diff-Fehler:",
@@ -263,8 +269,10 @@ var fr = Strings{
 
 	ServiceStopping:   "Arrêt du service :",
 	ServiceStopError:  "Erreur d'arrêt du service :",
+	ServiceStopped:    "Service arrêté.",
 	ServiceStarting:   "Démarrage du service :",
 	ServiceStartError: "Erreur de démarrage du service :",
+	ServiceStarted:    "Service démarré.",
 
 	ComputingDiff:   "Calcul du diff...",
 	DiffError:       "Erreur de diff :",
