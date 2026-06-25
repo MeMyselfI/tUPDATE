@@ -101,6 +101,10 @@ type Strings struct {
 	Done                         string
 	ContinueAnyway               string
 
+	// Preflight (pre-apply writability / lock check)
+	PreflightChecking string // "Checking write access to target files..."
+	PreflightBlocked  string // "Update aborted: %d file(s) locked or not writable:"
+
 	// Prompt UI
 	SuffixYesDefault string // shown when default=true, e.g. "[Y/n]"
 	SuffixNoDefault  string // shown when default=false, e.g. "[y/N]"
@@ -171,6 +175,9 @@ var en = Strings{
 	Done:                         "Done.",
 	ContinueAnyway:               "Continue anyway?",
 
+	PreflightChecking: "Checking write access to target files...",
+	PreflightBlocked:  "Update aborted: %d file(s) locked or not writable:",
+
 	SuffixYesDefault: "[Y/n]",
 	SuffixNoDefault:  "[y/N]",
 	RetryMessage:     "Please enter 'y' or 'n'.",
@@ -240,6 +247,9 @@ var de = Strings{
 	Done:                         "Fertig.",
 	ContinueAnyway:               "Trotzdem fortfahren?",
 
+	PreflightChecking: "Schreibrechte der Zieldateien prüfen...",
+	PreflightBlocked:  "Update abgebrochen: %d Datei(en) gesperrt oder nicht schreibbar:",
+
 	SuffixYesDefault: "[J/n]",
 	SuffixNoDefault:  "[j/N]",
 	RetryMessage:     "Bitte 'j' oder 'n' eingeben.",
@@ -308,6 +318,9 @@ var fr = Strings{
 	UpdateSuccess:                "Mise à jour réussie.",
 	Done:                         "Terminé.",
 	ContinueAnyway:               "Continuer malgré tout ?",
+
+	PreflightChecking: "Vérification des droits d'écriture sur les fichiers cibles...",
+	PreflightBlocked:  "Mise à jour annulée : %d fichier(s) verrouillé(s) ou non inscriptible(s) :",
 
 	SuffixYesDefault: "[O/n]",
 	SuffixNoDefault:  "[o/N]",

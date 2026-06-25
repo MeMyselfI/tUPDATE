@@ -1,7 +1,7 @@
 # tUPDATE — Projekt-Handoff & Arbeitsanleitung
 
 Dieses Dokument ist self-contained: Es reicht allein, um die Arbeit am Projekt fortzusetzen.
-Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.9.4** (2026-06-25).
+Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.10.0** (2026-06-25).
 
 ---
 
@@ -97,14 +97,16 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 - **Ohne Flag:** interaktive Buchstaben-Prompts. Format `[X/z]` (X=tar.xz Default). Stufe `[m/S/x]` (S=Standard/default Default). Großbuchstabe = Default. Im Deutschen heißt die mittlere Stufe „Standard" (Flag-Wert bleibt `default`).
 - **`--no-prompt` / Automation:** Defaults `tar.xz` / `default`. „Backup erstellen?" defaultet interaktiv auf **Ja**.
 - **Restore:** Tool spielt NICHT selbst zurück, gibt nur den Pfad aus. tar.xz manuell: `tar -xJf`.
+- **Preflight (Schreibrechte-/Lock-Check):** läuft nach Diff-Review, **vor dem Backup** (Dienst ist da schon gestoppt). `internal/sync/preflight.go::Preflight(liveRoot, diffs)` prüft mutationsfrei jeden Diff-Eintrag: Modified/Removed via `OpenFile(O_WRONLY)` ohne Trunc (fremder Lock/read-only → blockiert; repräsentativ fürs spätere `O_TRUNC`-Open in `apply.go`), Added via `CreateTemp` im nächsten existierenden Vorfahr-Ordner. Bei Treffern: Liste + `emit.PreflightFailed`, `maybeStartService()` (nichts mutiert → Dienst sauber zurück), **exit 8**. Verhindert Teil-Apply, wenn eine Zieldatei von Editor/Virenscanner/laufendem Dienst gehalten wird. Opt-out `--no-preflight` (Default an). **Rest-Lücke:** AV-Flacker-Race (Lock zwischen Probe und Apply) ungelöst → bräuchte zusätzlich Apply-Retry.
 - **Live-Anzeige:** Download-%, Entpacken-% (Statuszeile „Entpacken..." + `\r`-Balken nur Prozent), Backup-% , Apply = Dateipfade rauschen in einer `\r`-Zeile durch.
 - **i18n:** de/en/fr. `Detect()`: erst Env (`LC_ALL`/`LC_MESSAGES`/`LANG`), dann OS-nativ (Windows-UI-Sprache, da cmd keine Locale-Env setzt), sonst en. `--lang de|en|fr` erzwingt.
-- **Weitere Flags:** `--zip`, `--config`, `--app-root`, `--dry-run` (Pre-Flight-Checks), `--skip-service`, `--ignore-service-errors`, `--no-files-backup`, `--no-db-backup`, `--no-prompt`, `--detach`, `--logfile`, `--json`, `--lang`, `--version`.
+- **Weitere Flags:** `--zip`, `--config`, `--app-root`, `--dry-run` (Pre-Flight-Checks), `--skip-service`, `--ignore-service-errors`, `--no-files-backup`, `--no-db-backup`, `--no-preflight`, `--no-prompt`, `--detach`, `--logfile`, `--json`, `--lang`, `--version`.
 
 ---
 
 ## 7. Versionshistorie (Kurz)
 
+- **0.10.0** Preflight-Schreibrechte-/Lock-Check vor Apply (`internal/sync/preflight.go`): bricht mit exit 8 ab, wenn eine Zieldatei gesperrt/read-only/nicht anlegbar ist → kein Teil-Apply. Opt-out `--no-preflight`. Neues `preflight_failed`-NDJSON-Event.
 - **0.9.4** Service-Stop/-Start: Erfolg wird im Log bestätigt (`Service gestoppt.` / `Service gestartet.`).
 - **0.9.3** Apply: Dateipfade in einer `\r`-Zeile.
 - **0.9.2** Windows-`.exe` App-Icon (Refresh-Doppelpfeil, blau) via `tools/mkicon`.
@@ -121,6 +123,7 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 
 - **Nutzer testet Backup-Hang auf Windows** mit Stufe `min` (Release 0.9.1+). Erwartung: Balken läuft zügig → war reine `max`-Rechenzeit. Falls trotz `min` bei 0 % → echter Bug, dann an `internal/archive/backup.go` (`writeTarXzBackup`) ansetzen. **Rückmeldung steht noch aus.**
 - **Icon-Anzeige auf echtem Windows** ungeprüft (kein Windows hier). Einbettung + Build verifiziert; UPX behält Icon/Version-Resourcen normalerweise sichtbar.
+- **Apply-Retry (Option A)** offen: Preflight (0.10.0) deckt steady-state-Locks ab, aber Virenscanner-Flacker zwischen Probe und `sync.Apply` bleibt ein Race → bei Bedarf Retry mit Backoff in `internal/sync/apply.go::copyFile`/`os.Remove` ergänzen.
 - Optional angeboten, nicht umgesetzt: macOS `.app`-Bundle mit `.icns`.
 
 ---

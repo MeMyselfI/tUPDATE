@@ -203,6 +203,15 @@ func (e *Emitter) ApplyFailed(reason string) {
 	e.emit(map[string]any{"event": "apply_failed", "reason": reason})
 }
 
+// PreflightFailed reports that the pre-apply writability/lock check found one
+// or more blocking targets, so the update was aborted before any mutation.
+func (e *Emitter) PreflightFailed(count int) {
+	e.emit(map[string]any{
+		"event": "preflight_failed",
+		"count": count,
+	})
+}
+
 // DryRunCheck fires once per pre-flight check during --dry-run, carrying its
 // name, ok-flag, and a free-text detail (path, status code, error message).
 func (e *Emitter) DryRunCheck(name string, ok bool, detail string) {

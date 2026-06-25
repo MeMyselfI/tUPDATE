@@ -35,6 +35,7 @@ const (
 	exitSync         = 5
 	exitServiceStart = 6
 	exitUserAbort    = 7
+	exitPreflight    = 8
 	exitDryRunCheck  = 9
 )
 
@@ -49,6 +50,7 @@ type flagSet struct {
 	skipService         bool
 	noFilesBackup       bool
 	noDBBackup          bool
+	noPreflight         bool
 	ignoreServiceErrors bool
 	detach              bool
 	jsonOut             bool
@@ -248,6 +250,25 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 		fmt.Fprintln(stderr, s.UpdateAborted)
 		maybeStartService()
 		return exitUserAbort
+	}
+
+	// Pre-apply writability/lock check. The service is already stopped here, so
+	// any target that is still locked (editor, virus scanner, a service that
+	// failed to stop) is caught now — before the backup and before the first
+	// destructive write — instead of aborting Apply half-way into a mixed
+	// install. Hard abort; nothing has been mutated, so restarting the service
+	// returns to the original good state.
+	if !f.noPreflight {
+		fmt.Fprintln(stderr, s.PreflightChecking)
+		if blocks := sync.Preflight(appRoot, diffs); len(blocks) > 0 {
+			fmt.Fprintf(stderr, s.PreflightBlocked+"\n", len(blocks))
+			for _, b := range blocks {
+				fmt.Fprintf(stderr, "  %s — %s\n", b.Path, b.Reason)
+			}
+			emit.PreflightFailed(len(blocks))
+			maybeStartService()
+			return exitPreflight
+		}
 	}
 
 	var wantBackup bool
@@ -1091,6 +1112,7 @@ func parseFlags(args []string, stdout, stderr io.Writer) (*flagSet, error) {
 	fs.BoolVar(&f.skipService, "skip-service", false, "Service nicht stoppen/starten / skip service stop/start")
 	fs.BoolVar(&f.noFilesBackup, "no-files-backup", false, "ZIP-Backup ueberspringen / skip files (ZIP) backup")
 	fs.BoolVar(&f.noDBBackup, "no-db-backup", false, "DB-Backup (pg_dump) ueberspringen / skip DB backup")
+	fs.BoolVar(&f.noPreflight, "no-preflight", false, "Schreibrechte-/Lock-Check der Zieldateien vor Apply ueberspringen / skip pre-apply writability check")
 	fs.BoolVar(&f.ignoreServiceErrors, "ignore-service-errors", false, "bei Stop/Start-Fehler weitermachen / continue past service stop/start failures")
 	fs.BoolVar(&f.jsonOut, "json", false, "NDJSON-Events auf stdout (setzt --no-prompt voraus) / NDJSON events on stdout")
 	fs.StringVar(&f.lang, "lang", "", "UI-Sprache erzwingen: de | en | fr (Default: aus Env)")
@@ -1124,6 +1146,9 @@ INPUT / RUN MODE
 SERVICE
   --skip-service           Service-Stop/-Start auslassen / skip service stop+start
   --ignore-service-errors  bei Stop/Start-Fehler weitermachen statt abbrechen
+  --no-preflight           Schreibrechte-/Lock-Check der Zieldateien vor Apply
+                           auslassen (Default: an; bricht ab, wenn eine Zieldatei
+                           gesperrt/read-only/nicht anlegbar ist)
 
 BACKUP
   --no-files-backup        Datei-Backup-Schritt komplett ueberspringen (Prompt entfaellt)
