@@ -513,4 +513,11 @@ Coverage-Status: ~92 Tests, Module-/Integration-Mix, alle grün. E2E-Tests in `c
 
 ## Lizenz
 
-Proprietär. Alle Rechte vorbehalten.
+Apache License 2.0 — siehe [LICENSE](LICENSE) und [NOTICE](NOTICE).
+
+Kurz: freie Nutzung, Änderung und Weitergabe — auch kommerziell und in proprietärer
+Software. Einzige Pflicht: Copyright- und Lizenzhinweis (`LICENSE` + `NOTICE`)
+beibehalten und geänderte Dateien kennzeichnen. Die Lizenz enthält zusätzlich einen
+expliziten Patent-Grant. Software „AS IS", ohne Gewähr.
+
+Copyright 2026 Jörn Heid

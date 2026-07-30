@@ -17,6 +17,7 @@ Datei-Backup (+ optional DB-Dump via pg_dump), spielt das Update ein, startet de
 
 - **Modul:** `updater` (Go 1.26.4). Einzige externe Dependency: `github.com/ulikunitz/xz` (pure-Go LZMA2). Plus `github.com/cespare/xxhash/v2`.
 - **Einstieg:** `cmd/updater/main.go` → `cmd/updater/run.go` (`runApp`).
+- **Lizenz:** Apache-2.0 (`LICENSE` = kanonischer Volltext, `NOTICE` = Copyright + Third-Party-Hinweise). Copyright 2026 Jörn Heid. Kommerz-/Proprietär-Nutzung erlaubt, Patent-Grant inklusive. Per-Datei-SPDX-Header bewusst NICHT gesetzt (Build-Tag-`//go:build`-Zeilen müssen ganz oben stehen → fragil); LICENSE/NOTICE decken das Repo ab.
 
 ---
 
