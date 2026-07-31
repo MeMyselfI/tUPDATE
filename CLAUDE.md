@@ -1,7 +1,7 @@
 # tUPDATE — Projekt-Handoff & Arbeitsanleitung
 
 Dieses Dokument ist self-contained: Es reicht allein, um die Arbeit am Projekt fortzusetzen.
-Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.10.0** (2026-06-25).
+Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.10.1** (2026-07-31).
 
 ---
 
@@ -37,6 +37,7 @@ Datei-Backup (+ optional DB-Dump via pg_dump), spielt das Update ein, startet de
 make clean                       # WICHTIG: Make trackt .go-Quellen NICHT als Prereq → sonst stale Binaries (v.a. darwin)
 make build-all VERSION=X.Y.Z     # 6x go build + lipo universal = 7 Artefakte in dist/
 make upx-all                     # packt NUR 3: windows-amd64, linux-amd64, linux-arm64
+make sign                        # signiert windows-amd64/-arm64 (NACH upx! SimplySign Desktop eingeloggt)
 ```
 
 Dann:
@@ -56,6 +57,19 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 **Version** kommt per `-ldflags "-X main.version=..."` (Makefile `LDFLAGS`). `make.sh` gibt es nicht; alles im `Makefile`. Keine git tags außer den Release-Tags `vX.Y.Z`.
 
 **Icon (Windows):** `make icon` regeneriert `cmd/updater/icon.ico` via `tools/mkicon` (prozedural, stdlib). `make windows-manifest` bettet es über `versioninfo.json` (`IconPath`) + `goversioninfo` in `resource_windows_*.syso` ein (~600 KB je Datei). macOS/Linux-CLI können kein eingebettetes Icon tragen.
+
+**Code Signing (Windows Authenticode):** `make sign` signiert `dist/updater-windows-amd64.exe` + `-arm64.exe` mit dem **Certum Open Source Code Signing**-Zert. Läuft `tools/sign-windows.sh`.
+- **Reihenfolge zwingend:** `make sign` **NACH** `make upx-all` — UPX schreibt die `.exe` neu und würde eine vorhandene Signatur strippen. darwin/linux sind nicht Authenticode-signierbar (bewusst ausgeschlossen).
+- **Privater Schlüssel liegt in Certums SimplySign-Cloud-HSM** (`never extractable`). Zugriff via PKCS#11: SimplySign Desktop muss **laufen + eingeloggt** sein (Token-ID + OTP aus der SimplySign-Handy-App), sonst ist der Token unsichtbar und das Target bricht mit klarer Meldung ab.
+- **Toolchain (Homebrew):** `osslsigncode`, `libp11` (liefert PKCS#11-Engine `engines-3/pkcs11.dylib`), `opensc` (`pkcs11-tool` für die dynamische ID-Abfrage). Plus die **SimplySign Desktop**-App (liefert `/usr/local/lib/libSimplySignPKCS.dylib`).
+- **Cert-ID dynamisch:** Das Script liest die PKCS#11-Objekt-ID des Keys zur Laufzeit via `pkcs11-tool -O` → **jährliche Zert-Erneuerung braucht KEINE Änderung**. (Zert selbst 1 Jahr gültig, z. B. 2026-07-31 → 2027-07-31.)
+- **Timestamp:** RFC3161 via `http://time.certum.pl` (sha256-Signatur, sha384-TSA) → Signatur überlebt Cert-Ablauf.
+- **Idempotent:** bereits signierte `.exe` wird übersprungen (Override: `SIGN_FORCE=1`).
+- **`signing/`-Ordner (gitignored, NICHT im Repo):** enthält Leaf-Cert (`leaf.pem`, kam von Certum als `.cer`/`.pem`), Intermediate (`inter.pem`, von `repository.certum.pl/ccsca2021.cer`), Root (`root.pem` = CTNCA2), und die **`chain.pem` = leaf+intermediate** (das `-certs`-Bundle fürs Signieren). Kein Private Key auf Platte — der bleibt in der Cloud.
+- **Überschreibbare Vars:** `SIGN_ENGINE`, `SIGN_MODULE`, `SIGN_CHAIN`, `SIGN_TS`, `SIGN_HASH`, `SIGN_FORCE`.
+- **Verify-Gotcha:** `osslsigncode verify` liefert auf macOS **exit≠0** („unable to get local issuer") weil der lokale Trust-Store die Certum-Roots nicht kennt — **kein Signatur-Fehler**. Auf Windows sind die Certum-Roots im MS Trusted Root Program → vertraut. Deshalb greppt das Script den `verify`-**Output** statt sich auf den Exit-Code zu verlassen (sonst killt `set -o pipefail` den Erfolgsfall).
+
+**Release-Flow mit Signatur:** `make clean` → `make build-all VERSION=X.Y.Z` → `make upx-all` → **`make sign`** → commit → `gh release create`.
 
 ---
 
@@ -107,6 +121,7 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 
 ## 7. Versionshistorie (Kurz)
 
+- **0.10.1** Windows-Binaries (`amd64`/`arm64`) Authenticode-signiert (Certum Open Source Code Signing, SimplySign-Cloud-HSM). Neues `make sign` (`tools/sign-windows.sh`): dynamische Cert-ID via `pkcs11-tool`, RFC3161-Timestamp (`time.certum.pl`), läuft nach `upx-all`. `signing/` gitignored. Beseitigt „Unknown publisher" (UAC), baut SmartScreen-Reputation.
 - **0.10.0** Preflight-Schreibrechte-/Lock-Check vor Apply (`internal/sync/preflight.go`): bricht mit exit 8 ab, wenn eine Zieldatei gesperrt/read-only/nicht anlegbar ist → kein Teil-Apply. Opt-out `--no-preflight`. Neues `preflight_failed`-NDJSON-Event.
 - **0.9.4** Service-Stop/-Start: Erfolg wird im Log bestätigt (`Service gestoppt.` / `Service gestartet.`).
 - **0.9.3** Apply: Dateipfade in einer `\r`-Zeile.

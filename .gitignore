@@ -4,3 +4,6 @@
 *.swp
 *.swo
 *.log
+
+# Code-signing material (certs, chain, keys) — never commit
+signing/

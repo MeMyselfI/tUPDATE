@@ -29,7 +29,16 @@ ALL_TARGETS = \
   $(DIST)/updater-darwin-arm64 \
   $(DIST)/updater-darwin-universal
 
-.PHONY: all build-all test vet fmt clean upx-all windows-manifest icon help
+# Windows Authenticode signing (Certum Open Source cert in SimplySign cloud).
+# The signing cert's PKCS#11 ID is looked up at runtime, so a yearly cert
+# renewal needs no Makefile edit. Requires: osslsigncode, libp11, opensc, and
+# a running + logged-in SimplySign Desktop. See tools/sign-windows.sh.
+SIGN_SCRIPT   = tools/sign-windows.sh
+SIGN_TARGETS  = \
+  $(DIST)/updater-windows-amd64.exe \
+  $(DIST)/updater-windows-arm64.exe
+
+.PHONY: all build-all test vet fmt clean upx-all windows-manifest icon help sign
 
 all: build-all
 
@@ -41,6 +50,7 @@ help:
 	@echo "make icon             Regenerate cmd/updater/icon.ico from tools/mkicon"
 	@echo "make windows-manifest Regenerate cmd/updater/resource_windows_*.syso (embeds icon)"
 	@echo "make upx-all          UPX-pack windows + linux binaries (skips darwin)"
+	@echo "make sign             Authenticode-sign windows .exe (after upx; needs SimplySign Desktop)"
 	@echo "make clean            Remove dist/"
 
 build-all: $(ALL_TARGETS)
@@ -104,3 +114,9 @@ upx-all: $(UPX_TARGETS)
 	    $(UPX) --best --lzma "$$f" || exit 1; \
 	done
 	@ls -lh $(UPX_TARGETS)
+
+# Authenticode-sign the Windows binaries. MUST run AFTER upx-all: UPX rewrites
+# the .exe and would strip any prior signature. darwin/linux are not
+# Authenticode-signable and are intentionally excluded.
+sign:
+	@bash $(SIGN_SCRIPT) $(SIGN_TARGETS)
