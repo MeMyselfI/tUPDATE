@@ -1,7 +1,7 @@
 # tUPDATE — Projekt-Handoff & Arbeitsanleitung
 
 Dieses Dokument ist self-contained: Es reicht allein, um die Arbeit am Projekt fortzusetzen.
-Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.10.1** (2026-07-31).
+Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.10.2** (2026-08-04).
 
 ---
 
@@ -66,8 +66,11 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 - **Timestamp:** RFC3161 via `http://time.certum.pl` (sha256-Signatur, sha384-TSA) → Signatur überlebt Cert-Ablauf.
 - **Idempotent:** bereits signierte `.exe` wird übersprungen (Override: `SIGN_FORCE=1`).
 - **`signing/`-Ordner (gitignored, NICHT im Repo):** enthält Leaf-Cert (`leaf.pem`, kam von Certum als `.cer`/`.pem`), Intermediate (`inter.pem`, von `repository.certum.pl/ccsca2021.cer`), Root (`root.pem` = CTNCA2), und die **`chain.pem` = leaf+intermediate** (das `-certs`-Bundle fürs Signieren). Kein Private Key auf Platte — der bleibt in der Cloud.
-- **Überschreibbare Vars:** `SIGN_ENGINE`, `SIGN_MODULE`, `SIGN_CHAIN`, `SIGN_TS`, `SIGN_HASH`, `SIGN_FORCE`.
-- **Verify-Gotcha:** `osslsigncode verify` liefert auf macOS **exit≠0** („unable to get local issuer") weil der lokale Trust-Store die Certum-Roots nicht kennt — **kein Signatur-Fehler**. Auf Windows sind die Certum-Roots im MS Trusted Root Program → vertraut. Deshalb greppt das Script den `verify`-**Output** statt sich auf den Exit-Code zu verlassen (sonst killt `set -o pipefail` den Erfolgsfall).
+- **KETTEN-GOTCHA (0.10.1 war deswegen kaputt):** `-pkcs11cert` **schlägt `-certs`** — osslsigncode nimmt das Signaturzert dann vom Token und ignoriert das Chain-File komplett. Ergebnis: nur das Leaf im Signaturblock, Windows kann die Kette nicht bauen → UAC zeigt **„Unbekannter Herausgeber"** trotz gültiger Signatur (Intermediate müsste per AIA von `repository.certum.pl/ccsca2021.cer` nachgeladen werden — timeout-/firewall-anfällig, UAC wartet nicht). Fix: zusätzlich **`-ac signing/inter.pem`** („additional certificates to be added to the signature block"). Das Script hat seit 0.10.2 einen Post-Sign-Guard, der die Zerts im Block zählt und bei `<2` abbricht.
+- **Überschreibbare Vars:** `SIGN_ENGINE`, `SIGN_MODULE`, `SIGN_CHAIN`, `SIGN_AC`, `SIGN_TS`, `SIGN_HASH`, `SIGN_FORCE`.
+- **Verify-Gotcha:** `osslsigncode verify` **ohne `-CAfile`** liefert auf macOS exit≠0 („unable to get local issuer") weil der lokale Trust-Store die Certum-Roots nicht kennt — **kein Signatur-Fehler**. Deshalb greppt das Script den `verify`-**Output** statt sich auf den Exit-Code zu verlassen (sonst killt `set -o pipefail` den Erfolgsfall).
+- **Echter Ketten-Test (das, was Windows macht):** `osslsigncode verify -CAfile signing/root.pem -TSA-CAfile signing/root.pem dist/updater-windows-amd64.exe` → muss `Signature verification: ok` sagen. Nur den Root vorgeben, NICHT das Intermediate — sonst testet man die Lücke weg, die Windows sieht.
+- **`PKCS7_dataFinal failed` / `Failed to sign spcIndirectDataContent`:** SimplySign-Cloud-Session abgelaufen. `pkcs11-tool -O` listet die Objekte weiterhin (Token „sichtbar"), nur die private-Key-Operation scheitert — die Token-Preflight im Script fängt das also NICHT. Abhilfe: in SimplySign Desktop neu einloggen (Token-ID + OTP).
 
 **Release-Flow mit Signatur:** `make clean` → `make build-all VERSION=X.Y.Z` → `make upx-all` → **`make sign`** → commit → `gh release create`.
 
@@ -121,6 +124,7 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 
 ## 7. Versionshistorie (Kurz)
 
+- **0.10.2** Fix: Signaturkette unvollständig — nur das Leaf steckte im Signaturblock, weil `-pkcs11cert` das `-certs`-Chain-File aussticht. Windows zeigte deshalb trotz gültiger Signatur „Unbekannter Herausgeber" im UAC-Dialog. `tools/sign-windows.sh` gibt das Intermediate jetzt per `-ac signing/inter.pem` mit und zählt nach dem Signieren die Zerts im Block (`<2` → Abbruch). Verify gegen `signing/root.pem` allein: ok.
 - **0.10.1** Windows-Binaries (`amd64`/`arm64`) Authenticode-signiert (Certum Open Source Code Signing, SimplySign-Cloud-HSM). Neues `make sign` (`tools/sign-windows.sh`): dynamische Cert-ID via `pkcs11-tool`, RFC3161-Timestamp (`time.certum.pl`), läuft nach `upx-all`. `signing/` gitignored. Beseitigt „Unknown publisher" (UAC), baut SmartScreen-Reputation.
 - **0.10.0** Preflight-Schreibrechte-/Lock-Check vor Apply (`internal/sync/preflight.go`): bricht mit exit 8 ab, wenn eine Zieldatei gesperrt/read-only/nicht anlegbar ist → kein Teil-Apply. Opt-out `--no-preflight`. Neues `preflight_failed`-NDJSON-Event.
 - **0.9.4** Service-Stop/-Start: Erfolg wird im Log bestätigt (`Service gestoppt.` / `Service gestartet.`).
@@ -137,6 +141,8 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 
 ## 8. Offene Punkte / als Nächstes
 
+- **Nutzer testet UAC-Herausgeber auf Windows** mit 0.10.2: erwartet „Verifizierter Herausgeber: Open Source Developer Heid Jörn" statt „Unbekannter Herausgeber". **Rückmeldung steht noch aus.** Die v0.10.1-Release-Assets tragen weiterhin die unvollständige Kette — nicht mehr verteilen.
+- **Version-Resource ist stale:** `cmd/updater/versioninfo.json` steht fest auf `0.1.0.0`, CompanyName/LegalCopyright = `tUPDATE`. Datei-Eigenschaften → Details zeigen also weder die echte Version noch den Namen. Nicht sicherheitsrelevant (Herausgeber kommt aus der Signatur), aber kosmetisch offen; Fix hieße `versioninfo.json` aus `VERSION` generieren.
 - **Nutzer testet Backup-Hang auf Windows** mit Stufe `min` (Release 0.9.1+). Erwartung: Balken läuft zügig → war reine `max`-Rechenzeit. Falls trotz `min` bei 0 % → echter Bug, dann an `internal/archive/backup.go` (`writeTarXzBackup`) ansetzen. **Rückmeldung steht noch aus.**
 - **Icon-Anzeige auf echtem Windows** ungeprüft (kein Windows hier). Einbettung + Build verifiziert; UPX behält Icon/Version-Resourcen normalerweise sichtbar.
 - **Apply-Retry (Option A)** offen: Preflight (0.10.0) deckt steady-state-Locks ab, aber Virenscanner-Flacker zwischen Probe und `sync.Apply` bleibt ein Race → bei Bedarf Retry mit Backoff in `internal/sync/apply.go::copyFile`/`os.Remove` ergänzen.

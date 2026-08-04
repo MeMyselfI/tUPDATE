@@ -17,6 +17,7 @@
 #   SIGN_ENGINE  PKCS#11 engine (libp11)      default: Homebrew engines-3/pkcs11.dylib
 #   SIGN_MODULE  SimplySign PKCS#11 module     default: /usr/local/lib/libSimplySignPKCS.dylib
 #   SIGN_CHAIN   cert chain (leaf+intermediate) default: signing/chain.pem
+#   SIGN_AC      intermediate(s) for -ac        default: signing/inter.pem
 #   SIGN_TS      RFC3161 timestamp URL          default: http://time.certum.pl
 #   SIGN_HASH    digest algorithm               default: sha256
 #   SIGN_FORCE   re-sign even if already signed default: (unset)
@@ -26,6 +27,11 @@ set -euo pipefail
 ENGINE="${SIGN_ENGINE:-/opt/homebrew/lib/engines-3/pkcs11.dylib}"
 MODULE="${SIGN_MODULE:-/usr/local/lib/libSimplySignPKCS.dylib}"
 CHAIN="${SIGN_CHAIN:-signing/chain.pem}"
+# osslsigncode takes the signing certificate from -pkcs11cert, which makes it
+# ignore -certs entirely — so the intermediate must be handed over separately
+# via -ac, or only the leaf ends up in the signature block and Windows cannot
+# build a chain to the trusted root ("unknown publisher" in the UAC prompt).
+AC="${SIGN_AC:-signing/inter.pem}"
 TS="${SIGN_TS:-http://time.certum.pl}"
 HASH="${SIGN_HASH:-sha256}"
 
@@ -39,6 +45,7 @@ command -v pkcs11-tool  >/dev/null 2>&1 || die "pkcs11-tool not found (brew inst
 [ -f "$ENGINE" ] || die "PKCS#11 engine not found: $ENGINE (brew install libp11)"
 [ -f "$MODULE" ] || die "SimplySign module not found: $MODULE (install SimplySign Desktop)"
 [ -f "$CHAIN"  ] || die "cert chain not found: $CHAIN (run the chain-building steps in signing/)"
+[ -f "$AC"     ] || die "intermediate cert not found: $AC (fetch repository.certum.pl/ccsca2021.cer)"
 
 # --- preflight: token present + dynamic key ID --------------------------------
 # pkcs11-tool prints object attributes; the private key's ID looks like:
@@ -81,6 +88,7 @@ for exe in "$@"; do
     -pkcs11cert "$CERTURI" \
     -key "$KEYURI" \
     -certs "$CHAIN" \
+    -ac "$AC" \
     -h "$HASH" \
     -ts "$TS" \
     -in "$exe" \
@@ -91,5 +99,18 @@ for exe in "$@"; do
   vout="$(osslsigncode verify "$exe" 2>/dev/null || true)"
   printf '%s' "$vout" | grep -q 'Signature Index' \
     || die "verification found no signature after signing: $exe"
-  echo "sign-windows: signed  $exe"
+
+  # confirm the signature block carries leaf AND intermediate — with only the
+  # leaf, Windows has to fetch the intermediate over AIA and the UAC prompt
+  # falls back to "unknown publisher" whenever that fetch is slow or blocked.
+  sigtmp="${exe}.sig.$$"
+  osslsigncode extract-signature -in "$exe" -out "$sigtmp" >/dev/null 2>&1 \
+    || die "could not extract signature for chain check: $exe"
+  ncerts="$(openssl pkcs7 -inform DER -in "$sigtmp" -print_certs -noout 2>/dev/null \
+    | grep -c '^subject=' || true)"
+  rm -f "$sigtmp"
+  [ "$ncerts" -ge 2 ] \
+    || die "signature block holds only $ncerts certificate(s) — intermediate missing (check -ac $AC): $exe"
+
+  echo "sign-windows: signed  $exe  (${ncerts} certs in signature block)"
 done
