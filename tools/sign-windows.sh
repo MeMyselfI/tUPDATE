@@ -11,27 +11,38 @@
 # runtime (via pkcs11-tool), so a yearly certificate renewal — which mints a
 # new key/ID — needs no edit here.
 #
+# The public certificates live in a shared directory outside any repo
+# (~/.certum), so the yearly renewal is done once for every project that signs.
+# The repo-local signing/ directory still works as a fallback.
+#
 # Usage:  tools/sign-windows.sh <file.exe> [<file2.exe> ...]
 #
 # Overridable via environment:
+#   SIGN_DIR     shared cert directory        default: ~/.certum, else signing/
 #   SIGN_ENGINE  PKCS#11 engine (libp11)      default: Homebrew engines-3/pkcs11.dylib
 #   SIGN_MODULE  SimplySign PKCS#11 module     default: /usr/local/lib/libSimplySignPKCS.dylib
-#   SIGN_CHAIN   cert chain (leaf+intermediate) default: signing/chain.pem
-#   SIGN_AC      intermediate(s) for -ac        default: signing/inter.pem
+#   SIGN_CHAIN   cert chain (leaf+intermediate) default: $SIGN_DIR/chain.pem
+#   SIGN_AC      intermediate(s) for -ac        default: $SIGN_DIR/inter.pem
 #   SIGN_TS      RFC3161 timestamp URL          default: http://time.certum.pl
 #   SIGN_HASH    digest algorithm               default: sha256
 #   SIGN_FORCE   re-sign even if already signed default: (unset)
 #
 set -euo pipefail
 
+# Certs come from the shared ~/.certum by default; older checkouts that still
+# carry their own signing/ keep working.
+if [ -z "${SIGN_DIR:-}" ]; then
+  if [ -d "$HOME/.certum" ]; then SIGN_DIR="$HOME/.certum"; else SIGN_DIR="signing"; fi
+fi
+
 ENGINE="${SIGN_ENGINE:-/opt/homebrew/lib/engines-3/pkcs11.dylib}"
 MODULE="${SIGN_MODULE:-/usr/local/lib/libSimplySignPKCS.dylib}"
-CHAIN="${SIGN_CHAIN:-signing/chain.pem}"
+CHAIN="${SIGN_CHAIN:-$SIGN_DIR/chain.pem}"
 # osslsigncode takes the signing certificate from -pkcs11cert, which makes it
 # ignore -certs entirely — so the intermediate must be handed over separately
 # via -ac, or only the leaf ends up in the signature block and Windows cannot
 # build a chain to the trusted root ("unknown publisher" in the UAC prompt).
-AC="${SIGN_AC:-signing/inter.pem}"
+AC="${SIGN_AC:-$SIGN_DIR/inter.pem}"
 TS="${SIGN_TS:-http://time.certum.pl}"
 HASH="${SIGN_HASH:-sha256}"
 
@@ -44,7 +55,7 @@ command -v osslsigncode >/dev/null 2>&1 || die "osslsigncode not found (brew ins
 command -v pkcs11-tool  >/dev/null 2>&1 || die "pkcs11-tool not found (brew install opensc)"
 [ -f "$ENGINE" ] || die "PKCS#11 engine not found: $ENGINE (brew install libp11)"
 [ -f "$MODULE" ] || die "SimplySign module not found: $MODULE (install SimplySign Desktop)"
-[ -f "$CHAIN"  ] || die "cert chain not found: $CHAIN (run the chain-building steps in signing/)"
+[ -f "$CHAIN"  ] || die "cert chain not found: $CHAIN (chain.pem = leaf + intermediate; see ~/.certum)"
 [ -f "$AC"     ] || die "intermediate cert not found: $AC (fetch repository.certum.pl/ccsca2021.cer)"
 
 # --- preflight: token present + dynamic key ID --------------------------------
