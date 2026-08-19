@@ -554,7 +554,9 @@ func TestRunApp_ServiceStopFailContinueRunsWorkflow(t *testing.T) {
 	//   "Create backup?"                → n
 	//   "DB-backup via pg_dump?"        → n
 	//   "Apply update now?"             → y
-	stdin := strings.NewReader("y\ny\nn\nn\ny\n")
+	// Leading "y": the service run-state probe cannot classify the test stop
+	// command ("true"/"false"), so tUPDATE asks whether to stop it anyway.
+	stdin := strings.NewReader("y\ny\ny\nn\nn\ny\n")
 
 	args := []string{
 		"--zip", zipPath,
@@ -585,7 +587,9 @@ func TestRunApp_ServiceStopFailDeclineAborts(t *testing.T) {
 	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
 
 	// "Continue anyway?" → n
-	stdin := strings.NewReader("n\n")
+	// Leading "y": the service run-state probe cannot classify the test stop
+	// command ("true"/"false"), so tUPDATE asks whether to stop it anyway.
+	stdin := strings.NewReader("y\nn\n")
 
 	args := []string{
 		"--zip", zipPath,
@@ -614,7 +618,9 @@ func TestRunApp_ServiceStartFailFinalDeclineReturnsStartExit(t *testing.T) {
 	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
 
 	// ContinueOrShow=y, Backup=n, DBBackup=n, Update=y, ContinueAnywayAfterStartFail=n.
-	stdin := strings.NewReader("y\nn\nn\ny\nn\n")
+	// Leading "y": the service run-state probe cannot classify the test stop
+	// command ("true"/"false"), so tUPDATE asks whether to stop it anyway.
+	stdin := strings.NewReader("y\ny\nn\nn\ny\nn\n")
 	args := []string{
 		"--zip", zipPath,
 		"--config", confPath,
@@ -1155,5 +1161,101 @@ func TestProbePgdumpPassword_PgpassFileSatisfies(t *testing.T) {
 	}
 	if !strings.Contains(detail, ".pgpass") {
 		t.Errorf("expected detail to mention .pgpass, got %q", detail)
+	}
+}
+
+// tUPDATE must not start a service it never stopped. Here the stop command
+// fails and the operator continues anyway: the update goes through, but the
+// start command must stay untouched.
+func TestRunApp_StopFailedMeansNoStartAtTheEnd(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	marker := filepath.Join(tmp, "started.marker")
+
+	confPath := writePropertiesWithSync(t, live, "bin", "false", "touch "+marker)
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	// stop-anyway=y, continue-after-stop-fail=y, 3-way=y, backup=n, db=n, update=y
+	stdin := strings.NewReader("y\ny\ny\nn\nn\ny\n")
+	args := []string{"--zip", zipPath, "--config", confPath, "--app-root", live}
+
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(live, "bin", "x")); string(got) != "v2" {
+		t.Errorf("bin/x not applied: %q", got)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("start command ran although tUPDATE never stopped the service")
+	}
+	if !strings.Contains(stderr.String(), "start skipped") {
+		t.Errorf("expected a 'start skipped' notice:\n%s", stderr.String())
+	}
+}
+
+// --force-start-service overrides that rule.
+func TestRunApp_ForceStartServiceStartsWithoutAPriorStop(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	marker := filepath.Join(tmp, "started.marker")
+
+	confPath := writePropertiesWithSync(t, live, "bin", "false", "touch "+marker)
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	stdin := strings.NewReader("y\ny\ny\nn\nn\ny\n")
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--force-start-service",
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("start command did not run despite --force-start-service: %v", err)
+	}
+}
+
+// Declining the "stop anyway?" question on an inconclusive status probe means
+// the service is neither stopped nor started, while the update still applies.
+func TestRunApp_DeclineStopOnUnknownStateLeavesServiceAlone(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	stopMarker := filepath.Join(tmp, "stopped.marker")
+	startMarker := filepath.Join(tmp, "started.marker")
+
+	confPath := writePropertiesWithSync(t, live, "bin", "touch "+stopMarker, "touch "+startMarker)
+	buildZip(t, zipPath, map[string]string{"bin/x": "v2"})
+	writeFile(t, filepath.Join(live, "bin", "x"), "v1")
+
+	// stop-anyway=n, 3-way=y, backup=n, db=n, update=y
+	stdin := strings.NewReader("n\ny\nn\nn\ny\n")
+	args := []string{"--zip", zipPath, "--config", confPath, "--app-root", live}
+
+	var stdout, stderr bytes.Buffer
+	code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test")
+	if code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(live, "bin", "x")); string(got) != "v2" {
+		t.Errorf("bin/x not applied: %q", got)
+	}
+	if _, err := os.Stat(stopMarker); err == nil {
+		t.Error("stop command ran although the operator declined")
+	}
+	if _, err := os.Stat(startMarker); err == nil {
+		t.Error("start command ran although the service was never stopped")
 	}
 }

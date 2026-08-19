@@ -279,3 +279,64 @@ func TestServiceCommandForOS(t *testing.T) {
 		t.Errorf("StopCommand(plan9) = %q, want empty", got)
 	}
 }
+
+func TestFromMap_OptionalTuningKeys(t *testing.T) {
+	base := func() map[string]string {
+		props, err := Parse(strings.NewReader(validConf))
+		if err != nil {
+			t.Fatalf("parse validConf: %v", err)
+		}
+		return props
+	}
+
+	t.Run("absent means zero", func(t *testing.T) {
+		cfg, err := FromMap(base())
+		if err != nil {
+			t.Fatalf("FromMap: %v", err)
+		}
+		if cfg.DownloadParts != 0 {
+			t.Errorf("DownloadParts = %d, want 0 (unset)", cfg.DownloadParts)
+		}
+		if cfg.DiffWorkers != 0 {
+			t.Errorf("DiffWorkers = %d, want 0 (unset)", cfg.DiffWorkers)
+		}
+	})
+
+	t.Run("parsed when present", func(t *testing.T) {
+		m := base()
+		m["download.parallel.parts"] = "6"
+		m["diff.workers"] = "3"
+		cfg, err := FromMap(m)
+		if err != nil {
+			t.Fatalf("FromMap: %v", err)
+		}
+		if cfg.DownloadParts != 6 {
+			t.Errorf("DownloadParts = %d, want 6", cfg.DownloadParts)
+		}
+		if cfg.DiffWorkers != 3 {
+			t.Errorf("DiffWorkers = %d, want 3", cfg.DiffWorkers)
+		}
+	})
+
+	t.Run("empty value stays unset", func(t *testing.T) {
+		m := base()
+		m["download.parallel.parts"] = "  "
+		cfg, err := FromMap(m)
+		if err != nil {
+			t.Fatalf("FromMap: %v", err)
+		}
+		if cfg.DownloadParts != 0 {
+			t.Errorf("DownloadParts = %d, want 0", cfg.DownloadParts)
+		}
+	})
+
+	for _, bad := range []string{"0", "-1", "abc"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			m := base()
+			m["diff.workers"] = bad
+			if _, err := FromMap(m); err == nil {
+				t.Errorf("FromMap accepted diff.workers=%q", bad)
+			}
+		})
+	}
+}

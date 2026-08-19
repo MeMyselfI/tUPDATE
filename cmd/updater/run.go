@@ -52,6 +52,9 @@ type flagSet struct {
 	noDBBackup          bool
 	noPreflight         bool
 	ignoreServiceErrors bool
+	forceStartService   bool
+	downloadParts       int
+	diffWorkers         int
 	detach              bool
 	jsonOut             bool
 	lang                string
@@ -178,40 +181,83 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	runner.Stdout = stderr
 	runner.Stderr = stderr
 
+	// serviceWasStopped gates every later start: tUPDATE starts the service
+	// only if it stopped it itself, so a service that was deliberately down
+	// before the update stays down afterwards. --force-start-service overrides.
 	serviceWasStopped := false
-	maybeStartService := func() {
+	maybeStartService := func() startOutcome {
+		if f.skipService || f.dryRun {
+			return startSkipped
+		}
 		if !serviceWasStopped {
-			return
+			if !f.forceStartService {
+				fmt.Fprintln(stderr, s.ServiceStartSkipped)
+				emit.ServiceStartSkipped("not_stopped_by_updater")
+				return startSkipped
+			}
+			fmt.Fprintln(stderr, s.ServiceStartForced)
 		}
 		fmt.Fprintln(stderr, s.ServiceStarting, startCmd)
 		startCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second)
 		defer cancel()
 		if err := runner.Run(startCtx, startCmd, time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second); err != nil {
 			fmt.Fprintln(stderr, s.ServiceStartError, err)
-		} else {
-			fmt.Fprintln(stderr, s.ServiceStarted)
+			emit.ServiceStartFailed(err.Error())
+			return startFailed
 		}
+		fmt.Fprintln(stderr, s.ServiceStarted)
+		emit.ServiceStartOK()
+		return startOK
 	}
 
 	if !f.skipService && !f.dryRun {
-		fmt.Fprintln(stderr, s.ServiceStopping, stopCmd)
-		stopCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ServiceStopTimeoutSecs)*time.Second)
-		err := runner.Run(stopCtx, stopCmd, time.Duration(cfg.ServiceStopTimeoutSecs)*time.Second)
-		cancel()
-		if err != nil {
-			fmt.Fprintln(stderr, s.ServiceStopError, err)
-			emit.ServiceStopFailed(err.Error())
-			// --ignore-service-errors forces continue.
-			// Otherwise --no-prompt aborts and interactive mode asks.
-			cont, perr := promptContinue(prompter, f.noPrompt, f.ignoreServiceErrors, s, stderr)
-			if perr != nil || !cont {
-				return exitServiceStop
+		// Ask the service manager whether there is anything to stop. Running
+		// the stop command against an already-stopped service usually exits 0,
+		// which would look like "we stopped it" and get the service started at
+		// the end of the run — exactly what must not happen.
+		state, stateDetail := serviceRunState(runtime.GOOS, stopCmd)
+		doStop := true
+		switch state {
+		case serviceStopped:
+			fmt.Fprintln(stderr, s.ServiceNotRunning, stateDetail)
+			emit.ServiceStopSkipped("not_running")
+			doStop = false
+		case serviceUnknown:
+			// No reliable answer (unknown manager, status tool missing,
+			// timeout). Let the operator decide; automation keeps the old
+			// stop-then-start behaviour via the prompter's default.
+			fmt.Fprintln(stderr, s.ServiceStateUnknown, stateDetail)
+			ans, perr := prompter.Confirm(s.ServiceStopAnywayQuestion, true)
+			if perr != nil {
+				fmt.Fprintln(stderr, s.PromptError, perr)
+				return exitUserAbort
 			}
-			serviceWasStopped = false
-		} else {
-			fmt.Fprintln(stderr, s.ServiceStopped)
-			emit.ServiceStopOK()
-			serviceWasStopped = true
+			if !ans {
+				emit.ServiceStopSkipped("user_declined")
+				doStop = false
+			}
+		}
+
+		if doStop {
+			fmt.Fprintln(stderr, s.ServiceStopping, stopCmd)
+			stopCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ServiceStopTimeoutSecs)*time.Second)
+			err := runner.Run(stopCtx, stopCmd, time.Duration(cfg.ServiceStopTimeoutSecs)*time.Second)
+			cancel()
+			if err != nil {
+				fmt.Fprintln(stderr, s.ServiceStopError, err)
+				emit.ServiceStopFailed(err.Error())
+				// --ignore-service-errors forces continue.
+				// Otherwise --no-prompt aborts and interactive mode asks.
+				cont, perr := promptContinue(prompter, f.noPrompt, f.ignoreServiceErrors, s, stderr)
+				if perr != nil || !cont {
+					return exitServiceStop
+				}
+				serviceWasStopped = false
+			} else {
+				fmt.Fprintln(stderr, s.ServiceStopped)
+				emit.ServiceStopOK()
+				serviceWasStopped = true
+			}
 		}
 	}
 
@@ -222,7 +268,14 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	emit.ExtractDone(refRoot)
 
 	fmt.Fprintln(stderr, s.ComputingDiff)
-	diffs, err := sync.Compute(refRoot, appRoot, cfg.SyncDirectories)
+	diffTick := diffTicker(f)
+	diffs, err := sync.Compute(refRoot, appRoot, cfg.SyncDirectories, sync.Options{
+		Progress: diffTick,
+		Workers:  resolveDiffWorkers(f, cfg),
+	})
+	if diffTick != nil {
+		fmt.Fprintln(os.Stderr) // finish the single-line ticker
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, s.DiffError, err)
 		emit.FatalError("diff", err.Error())
@@ -375,27 +428,29 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	fmt.Fprintln(stderr, s.UpdateSuccess)
 	emit.ApplyOK()
 
-	if !f.skipService {
-		fmt.Fprintln(stderr, s.ServiceStarting, startCmd)
-		startCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second)
-		err := runner.Run(startCtx, startCmd, time.Duration(cfg.ServiceStartTimeoutSecs)*time.Second)
-		cancel()
-		if err != nil {
-			fmt.Fprintln(stderr, s.ServiceStartError, err)
-			emit.ServiceStartFailed(err.Error())
-			cont, perr := promptContinue(prompter, f.noPrompt, f.ignoreServiceErrors, s, stderr)
-			if perr != nil || !cont {
-				return exitServiceStart
-			}
-		} else {
-			fmt.Fprintln(stderr, s.ServiceStarted)
-			emit.ServiceStartOK()
+	// Same gate as every abort path above, but here a failed start is worth an
+	// exit code: the update landed and the service should be back up.
+	if maybeStartService() == startFailed {
+		cont, perr := promptContinue(prompter, f.noPrompt, f.ignoreServiceErrors, s, stderr)
+		if perr != nil || !cont {
+			return exitServiceStart
 		}
 	}
 
 	fmt.Fprintln(stderr, s.Done)
 	return exitOK
 }
+
+// startOutcome is the result of an attempted service start. startSkipped means
+// no start was attempted — either service handling is off, or tUPDATE never
+// stopped the service and must not start it.
+type startOutcome int
+
+const (
+	startSkipped startOutcome = iota
+	startOK
+	startFailed
+)
 
 // fileSize is a best-effort os.Stat wrapper used to enrich emit events. A
 // stat failure is not worth aborting the workflow for, so we just report 0.
@@ -457,6 +512,43 @@ func applyTicker(f *flagSet) func(string) {
 			name = "..." + name[len(name)-(w-3):]
 		}
 		fmt.Fprintf(os.Stderr, "\r  %-*s", w, name)
+	}
+}
+
+// diffTicker returns a progress callback for sync.Compute that renders one
+// carriage-return status line per sync directory. The listing phase has no
+// known total (the tree size is only known once the walk ends), so it shows a
+// running file count; the comparison phase — where the file hashing happens and
+// most of the wall time goes — shows a real percentage.
+//
+// Disabled (nil) under --json, --detach, or a non-terminal stderr. Throttled to
+// ~20 Hz so a tree with 100k files does not spend its time on terminal writes.
+func diffTicker(f *flagSet) sync.Progress {
+	if f.jsonOut || f.detach || !isTerminal(os.Stderr) {
+		return nil
+	}
+	var (
+		last     time.Time
+		lastWide int
+	)
+	return func(dir string, done, total int, path string) {
+		now := time.Now()
+		if done < total && now.Sub(last) < 50*time.Millisecond {
+			return
+		}
+		last = now
+
+		var line string
+		if total > 0 {
+			line = fmt.Sprintf("  %s: %3d%% (%d/%d)", dir, done*100/total, done, total)
+		} else {
+			line = fmt.Sprintf("  %s: %d Dateien / files", dir, done)
+		}
+		if pad := lastWide - len([]rune(line)); pad > 0 {
+			line += strings.Repeat(" ", pad)
+		}
+		lastWide = len([]rune(line))
+		fmt.Fprint(os.Stderr, "\r"+line)
 	}
 }
 
@@ -593,21 +685,32 @@ func probeServiceBinary(cmd string) (bool, string) {
 	return true, path
 }
 
-// probeServiceRunning is the complement to probeServiceBinary: the latter only
+// serviceState is the tri-state verdict of a run-state probe. The distinction
+// between "definitely stopped" and "could not tell" drives real behaviour:
+// tUPDATE only restarts a service it stopped itself, so collapsing the two
+// would either strand a running service or start one that was deliberately
+// down.
+type serviceState int
+
+const (
+	serviceUnknown serviceState = iota
+	serviceRunning
+	serviceStopped
+)
+
+// serviceRunState is the complement to probeServiceBinary: the latter only
 // proves the control binary (launchctl / systemctl / sc) is callable; this one
-// tries to learn whether the managed service is actually running, so a dry-run
-// can warn that the live update has nothing to stop.
+// tries to learn whether the managed service is actually running.
 //
 // It is deliberately best-effort. The service identifier is parsed from the
 // configured service.stop command (last token, e.g. "tosce" / "tOSCE-Server"),
 // and a read-only status query is run for the recognised managers. Anything we
 // cannot determine — an unknown manager, a missing status tool, unparseable
-// output, or a timeout — returns ok=true so an inconclusive probe never blocks
-// dry-run. Only a clearly stopped/absent service returns ok=false.
-func probeServiceRunning(goos, stopCmd string) (bool, string) {
+// output, or a timeout — yields serviceUnknown.
+func serviceRunState(goos, stopCmd string) (serviceState, string) {
 	manager, id := parseServiceTarget(stopCmd)
 	if manager == "" || id == "" {
-		return true, "inconclusive: cannot derive service from stop command"
+		return serviceUnknown, "inconclusive: cannot derive service from stop command"
 	}
 
 	statusBin := manager
@@ -617,27 +720,36 @@ func probeServiceRunning(goos, stopCmd string) (bool, string) {
 	}
 	binPath, err := exec.LookPath(statusBin)
 	if err != nil {
-		return true, "inconclusive: " + statusBin + " not on PATH (skipped)"
+		return serviceUnknown, "inconclusive: " + statusBin + " not on PATH (skipped)"
 	}
 
 	switch manager {
 	case "launchctl":
 		out, runErr, timedOut := runStatusCmd(binPath, "list", id)
 		if timedOut {
-			return true, "inconclusive: launchctl status query timed out"
+			return serviceUnknown, "inconclusive: launchctl status query timed out"
 		}
 		return interpretLaunchctl(out, runErr)
 	case "systemctl":
 		out, _, timedOut := runStatusCmd(binPath, "is-active", id)
 		if timedOut {
-			return true, "inconclusive: systemctl status query timed out"
+			return serviceUnknown, "inconclusive: systemctl status query timed out"
 		}
 		return interpretSystemctl(out)
 	case "net", "sc":
 		return probeWindowsServiceRunning(binPath, id)
 	default:
-		return true, "inconclusive: unsupported service manager " + manager
+		return serviceUnknown, "inconclusive: unsupported service manager " + manager
 	}
+}
+
+// probeServiceRunning adapts serviceRunState to the dry-run check contract,
+// where a single ok-flag is reported. An inconclusive probe counts as ok so a
+// "couldn't tell" never blocks dry-run; only a clearly stopped service fails
+// the (non-fatal) check.
+func probeServiceRunning(goos, stopCmd string) (bool, string) {
+	state, detail := serviceRunState(goos, stopCmd)
+	return state != serviceStopped, detail
 }
 
 // runStatusCmd runs a read-only status command with a short timeout. timedOut
@@ -658,10 +770,10 @@ func runStatusCmd(bin string, args ...string) (out string, err error, timedOut b
 // name, but `sc query` only understands the key name. So when the first query
 // reports the service does not exist (error 1060) we treat id as a display
 // name, resolve it to the key name with `sc getkeyname`, and query again.
-func probeWindowsServiceRunning(scPath, id string) (bool, string) {
+func probeWindowsServiceRunning(scPath, id string) (serviceState, string) {
 	out, runErr, timedOut := runStatusCmd(scPath, "query", id)
 	if timedOut {
-		return true, "inconclusive: sc status query timed out"
+		return serviceUnknown, "inconclusive: sc status query timed out"
 	}
 	if classifySc(out, runErr) != scNotFound {
 		return interpretSc(out, runErr)
@@ -674,13 +786,13 @@ func probeWindowsServiceRunning(scPath, id string) (bool, string) {
 	}
 	out2, runErr2, timedOut2 := runStatusCmd(scPath, "query", key)
 	if timedOut2 {
-		return true, "inconclusive: sc status query timed out"
+		return serviceUnknown, "inconclusive: sc status query timed out"
 	}
 	if classifySc(out2, runErr2) == scNotFound {
 		return interpretSc(out, runErr)
 	}
-	ok, detail := interpretSc(out2, runErr2)
-	return ok, detail + " (display name " + id + " -> service " + key + ")"
+	state, detail := interpretSc(out2, runErr2)
+	return state, detail + " (display name " + id + " -> service " + key + ")"
 }
 
 // scResolveKeyName runs `sc getkeyname <displayName>` and returns the resolved
@@ -732,23 +844,23 @@ func commandBasename(path string) string {
 // interpretLaunchctl maps `launchctl list <label>` output to a running verdict.
 // A non-zero exit means the label is not loaded → not running. When loaded, the
 // printed dict carries a "PID" key only while the job has a live process.
-func interpretLaunchctl(out string, runErr error) (bool, string) {
+func interpretLaunchctl(out string, runErr error) (serviceState, string) {
 	if runErr != nil {
-		return false, "not running (launchctl: label not loaded)"
+		return serviceStopped, "not running (launchctl: label not loaded)"
 	}
 	if strings.Contains(out, "\"PID\"") || strings.Contains(out, "PID =") {
-		return true, "running (launchctl reports a PID)"
+		return serviceRunning, "running (launchctl reports a PID)"
 	}
 	if strings.Contains(out, "{") {
-		return false, "not running (launchctl: loaded, no PID)"
+		return serviceStopped, "not running (launchctl: loaded, no PID)"
 	}
-	return true, "inconclusive: unparseable launchctl output"
+	return serviceUnknown, "inconclusive: unparseable launchctl output"
 }
 
 // interpretSystemctl maps `systemctl is-active <unit>` stdout to a verdict.
 // The exit code is intentionally ignored: is-active exits non-zero whenever the
 // unit isn't active, so the textual state is the reliable signal.
-func interpretSystemctl(out string) (bool, string) {
+func interpretSystemctl(out string) (serviceState, string) {
 	state := strings.TrimSpace(out)
 	// is-active can print multiple lines for templated/multiple units; the
 	// first word is the state of interest.
@@ -757,11 +869,11 @@ func interpretSystemctl(out string) (bool, string) {
 	}
 	switch state {
 	case "active", "activating", "reloading":
-		return true, "running (systemctl: " + state + ")"
+		return serviceRunning, "running (systemctl: " + state + ")"
 	case "inactive", "failed", "deactivating":
-		return false, "not running (systemctl: " + state + ")"
+		return serviceStopped, "not running (systemctl: " + state + ")"
 	default:
-		return true, "inconclusive: systemctl state " + quoteOrEmpty(state)
+		return serviceUnknown, "inconclusive: systemctl state " + quoteOrEmpty(state)
 	}
 }
 
@@ -808,19 +920,19 @@ func classifySc(out string, runErr error) scState {
 	return scUnknown
 }
 
-// interpretSc maps an sc classification to a (ok, detail) verdict. A missing
-// service is a clear "not running"; an unrecognised output is inconclusive
-// (ok=true) so a parsing gap never blocks dry-run.
-func interpretSc(out string, runErr error) (bool, string) {
+// interpretSc maps an sc classification to a state verdict. A missing service
+// is a clear "not running"; an unrecognised output stays inconclusive so a
+// parsing gap is never mistaken for a definite answer.
+func interpretSc(out string, runErr error) (serviceState, string) {
 	switch classifySc(out, runErr) {
 	case scRunning:
-		return true, "running (sc: state RUNNING)"
+		return serviceRunning, "running (sc: state RUNNING)"
 	case scStopped:
-		return false, "not running (sc: state STOPPED)"
+		return serviceStopped, "not running (sc: state STOPPED)"
 	case scNotFound:
-		return false, "not running (sc: service not found)"
+		return serviceStopped, "not running (sc: service not found)"
 	default:
-		return true, "inconclusive: unparseable sc output"
+		return serviceUnknown, "inconclusive: unparseable sc output"
 	}
 }
 
@@ -946,6 +1058,7 @@ func probeDownloadURL(cfg *config.Config) (bool, string) {
 			URL: cfg.ProxyURL, User: cfg.ProxyUser,
 			Password: cfg.ProxyPassword, NoProxy: cfg.ProxyNoProxy,
 		},
+		download.ClientOptions{},
 	)
 	if err != nil {
 		return false, "client: " + err.Error()
@@ -1114,6 +1227,9 @@ func parseFlags(args []string, stdout, stderr io.Writer) (*flagSet, error) {
 	fs.BoolVar(&f.noDBBackup, "no-db-backup", false, "DB-Backup (pg_dump) ueberspringen / skip DB backup")
 	fs.BoolVar(&f.noPreflight, "no-preflight", false, "Schreibrechte-/Lock-Check der Zieldateien vor Apply ueberspringen / skip pre-apply writability check")
 	fs.BoolVar(&f.ignoreServiceErrors, "ignore-service-errors", false, "bei Stop/Start-Fehler weitermachen / continue past service stop/start failures")
+	fs.BoolVar(&f.forceStartService, "force-start-service", false, "Service am Ende immer starten, auch wenn tUPDATE ihn nicht gestoppt hat / always start the service at the end")
+	fs.IntVar(&f.downloadParts, "download-parts", 0, "parallele Download-Verbindungen, 1 = aus (Default: download.parallel.parts, sonst 4)")
+	fs.IntVar(&f.diffWorkers, "diff-workers", 0, "parallel verglichene Dateien beim Diff (Default: diff.workers, sonst min(CPUs, 8))")
 	fs.BoolVar(&f.jsonOut, "json", false, "NDJSON-Events auf stdout (setzt --no-prompt voraus) / NDJSON events on stdout")
 	fs.StringVar(&f.lang, "lang", "", "UI-Sprache erzwingen: de | en | fr (Default: aus Env)")
 	fs.StringVar(&f.backupFormat, "backup-format", "", "Backup-Format: zip | tar.xz (Default: interaktiv fragen, sonst tar.xz)")
@@ -1142,10 +1258,22 @@ INPUT / RUN MODE
   --config <path>          alternative properties-Datei (Default: <approot>/conf/updater.properties)
   --app-root <path>        App-Root explizit setzen (Default: dirname(dirname(executable)))
   --dry-run                nur Diff anzeigen, kein Apply / show diff only
+  --download-parts <n>     parallele Download-Verbindungen (Default:
+                           download.parallel.parts aus der properties-Datei,
+                           sonst 4; 1 = ein einziger Stream). Wird nur genutzt,
+                           wenn der Server HTTP-Range-Requests beherrscht und
+                           die Datei gross genug ist.
+  --diff-workers <n>       parallel verglichene Dateien beim Diff (Default:
+                           diff.workers aus der properties-Datei, sonst
+                           min(CPU-Kerne, 8)). Auf Netzlaufwerken oder
+                           klassischen Festplatten kann 1 oder 2 schneller sein.
 
 SERVICE
   --skip-service           Service-Stop/-Start auslassen / skip service stop+start
   --ignore-service-errors  bei Stop/Start-Fehler weitermachen statt abbrechen
+  --force-start-service    Service am Ende immer starten, auch wenn tUPDATE ihn
+                           nicht selbst gestoppt hat. Ohne dieses Flag gilt:
+                           gestartet wird nur, was tUPDATE vorher gestoppt hat.
   --no-preflight           Schreibrechte-/Lock-Check der Zieldateien vor Apply
                            auslassen (Default: an; bricht ab, wenn eine Zieldatei
                            gesperrt/read-only/nicht anlegbar ist)
@@ -1217,6 +1345,31 @@ EXAMPLES
 	fmt.Fprint(w, help)
 }
 
+// resolveDownloadParts picks the number of parallel download connections:
+// --download-parts wins, then download.parallel.parts from the properties
+// file, then the package default. The value is clamped inside the download
+// package, which also silently falls back to a single stream when the server
+// or the payload cannot be sliced.
+func resolveDownloadParts(f *flagSet, cfg *config.Config) int {
+	if f.downloadParts > 0 {
+		return f.downloadParts
+	}
+	if cfg.DownloadParts > 0 {
+		return cfg.DownloadParts
+	}
+	return download.DefaultParts
+}
+
+// resolveDiffWorkers picks how many files the diff compares in parallel:
+// --diff-workers wins, then diff.workers from the properties file, then 0,
+// which lets the sync package derive a value from the CPU count.
+func resolveDiffWorkers(f *flagSet, cfg *config.Config) int {
+	if f.diffWorkers > 0 {
+		return f.diffWorkers
+	}
+	return cfg.DiffWorkers
+}
+
 func resolveAppRoot(override string) (string, error) {
 	if override != "" {
 		abs, err := filepath.Abs(override)
@@ -1247,12 +1400,14 @@ func acquireZip(f *flagSet, cfg *config.Config, emit *machine.Emitter, stderr io
 		return abs, noopCleanup, exitOK
 	}
 
+	parts := resolveDownloadParts(f, cfg)
 	client, err := download.NewClient(
 		time.Duration(cfg.DownloadTimeoutSecs)*time.Second,
 		download.ProxyConfig{
 			URL: cfg.ProxyURL, User: cfg.ProxyUser,
 			Password: cfg.ProxyPassword, NoProxy: cfg.ProxyNoProxy,
 		},
+		download.ClientOptions{Parts: parts},
 	)
 	if err != nil {
 		fmt.Fprintln(stderr, s.HTTPClientError, err)
@@ -1270,7 +1425,7 @@ func acquireZip(f *flagSet, cfg *config.Config, emit *machine.Emitter, stderr io
 	tmp.Close()
 	cleanup := func() { _ = os.Remove(dest) }
 
-	d := &download.Downloader{Client: client, Progress: stderr}
+	d := &download.Downloader{Client: client, Progress: stderr, Parts: parts}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.DownloadTimeoutSecs)*time.Second)
 	defer cancel()
 

@@ -32,7 +32,7 @@ func TestDiffDir_AllUnchanged(t *testing.T) {
 	writeFile(t, filepath.Join(ref, "bin", "a.txt"), "alpha")
 	writeFile(t, filepath.Join(live, "bin", "a.txt"), "alpha")
 
-	d, err := DiffDir(ref, live, "bin")
+	d, err := DiffDir(ref, live, "bin", Options{})
 	if err != nil {
 		t.Fatalf("DiffDir: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestDiffDir_DetectsAddedModifiedRemoved(t *testing.T) {
 	// Removed (live only)
 	writeFile(t, filepath.Join(live, "bin", "removed.txt"), "old-file")
 
-	d, err := DiffDir(ref, live, "bin")
+	d, err := DiffDir(ref, live, "bin", Options{})
 	if err != nil {
 		t.Fatalf("DiffDir: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestDiffDir_Recursive(t *testing.T) {
 	writeFile(t, filepath.Join(ref, "www", "sub", "inner.html"), "<new/>")
 	writeFile(t, filepath.Join(live, "www", "sub", "inner.html"), "<old/>")
 
-	d, err := DiffDir(ref, live, "www")
+	d, err := DiffDir(ref, live, "www", Options{})
 	if err != nil {
 		t.Fatalf("DiffDir: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestDiffDir_RefDirMissing(t *testing.T) {
 	live := filepath.Join(tmp, "live")
 	writeFile(t, filepath.Join(live, "etc", "a.cfg"), "x")
 
-	d, err := DiffDir(filepath.Join(tmp, "ref-missing"), live, "etc")
+	d, err := DiffDir(filepath.Join(tmp, "ref-missing"), live, "etc", Options{})
 	if err != nil {
 		t.Fatalf("DiffDir: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestDiffDir_LiveDirMissing(t *testing.T) {
 	ref := filepath.Join(tmp, "ref")
 	writeFile(t, filepath.Join(ref, "libs", "x.jar"), "jar")
 
-	d, err := DiffDir(ref, filepath.Join(tmp, "live-missing"), "libs")
+	d, err := DiffDir(ref, filepath.Join(tmp, "live-missing"), "libs", Options{})
 	if err != nil {
 		t.Fatalf("DiffDir: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestDiffDir_LiveDirMissing(t *testing.T) {
 
 func TestDiffDir_BothMissing(t *testing.T) {
 	tmp := t.TempDir()
-	d, err := DiffDir(filepath.Join(tmp, "no-ref"), filepath.Join(tmp, "no-live"), "etc")
+	d, err := DiffDir(filepath.Join(tmp, "no-ref"), filepath.Join(tmp, "no-live"), "etc", Options{})
 	if err != nil {
 		t.Fatalf("DiffDir: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestCompute_MultipleDirs(t *testing.T) {
 	writeFile(t, filepath.Join(live, "www", "i.html"), "v1") // modified
 	writeFile(t, filepath.Join(ref, "etc", "new.cfg"), "x")  // added
 
-	diffs, err := Compute(ref, live, []string{"bin", "www", "etc", "libs"})
+	diffs, err := Compute(ref, live, []string{"bin", "www", "etc", "libs"}, Options{})
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestDiffDir_Symlinks(t *testing.T) {
 		t.Skipf("symlink unsupported: %v", err)
 	}
 
-	d, err := DiffDir(filepath.Join(tmp, "ref-missing"), filepath.Join(tmp, "live"), "bin")
+	d, err := DiffDir(filepath.Join(tmp, "ref-missing"), filepath.Join(tmp, "live"), "bin", Options{})
 	if err != nil {
 		t.Fatalf("DiffDir: %v", err)
 	}

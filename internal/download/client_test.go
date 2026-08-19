@@ -17,7 +17,7 @@ func mustRequest(t *testing.T, rawURL string) *http.Request {
 }
 
 func TestNewClient_NoProxy(t *testing.T) {
-	c, err := NewClient(10*time.Second, ProxyConfig{})
+	c, err := NewClient(10*time.Second, ProxyConfig{}, ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestNewClient_NoProxy(t *testing.T) {
 func TestNewClient_ProxyAppliedToMatchingHost(t *testing.T) {
 	c, err := NewClient(10*time.Second, ProxyConfig{
 		URL: "http://proxy.internal:8080",
-	})
+	}, ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestNewClient_ProxyWithBasicAuth(t *testing.T) {
 		URL:      "http://proxy.internal:8080",
 		User:     "alice",
 		Password: "s3cret",
-	})
+	}, ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestNewClient_NoProxyBypassesProxy(t *testing.T) {
 	c, err := NewClient(10*time.Second, ProxyConfig{
 		URL:     "http://proxy.internal:8080",
 		NoProxy: "localhost, 127.0.0.1, internal.example.com",
-	})
+	}, ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestNewClient_NoProxyBypassesProxy(t *testing.T) {
 }
 
 func TestNewClient_InvalidProxyURL(t *testing.T) {
-	_, err := NewClient(10*time.Second, ProxyConfig{URL: "not-a-url"})
+	_, err := NewClient(10*time.Second, ProxyConfig{URL: "not-a-url"}, ClientOptions{})
 	if err == nil {
 		t.Fatal("expected error for proxy URL without scheme/host")
 	}

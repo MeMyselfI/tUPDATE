@@ -23,7 +23,7 @@ func TestDownload_Success(t *testing.T) {
 	tmp := t.TempDir()
 	dest := filepath.Join(tmp, "out.zip")
 
-	client, err := NewClient(10*time.Second, ProxyConfig{})
+	client, err := NewClient(10*time.Second, ProxyConfig{}, ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestDownload_NotFoundReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, err := NewClient(10*time.Second, ProxyConfig{})
+	client, err := NewClient(10*time.Second, ProxyConfig{}, ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestDownload_ContextCancelled(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, err := NewClient(5*time.Second, ProxyConfig{})
+	client, err := NewClient(5*time.Second, ProxyConfig{}, ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestDownload_ProgressEmitted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, err := NewClient(10*time.Second, ProxyConfig{})
+	client, err := NewClient(10*time.Second, ProxyConfig{}, ClientOptions{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

@@ -11,6 +11,9 @@ import (
 type Config struct {
 	DownloadURL         string
 	DownloadTimeoutSecs int
+	// DownloadParts is the number of parallel range requests. 0 means the key
+	// was not set, leaving the choice to the caller's built-in default.
+	DownloadParts int
 
 	ProxyURL      string
 	ProxyUser     string
@@ -18,6 +21,9 @@ type Config struct {
 	ProxyNoProxy  string
 
 	SyncDirectories []string
+	// DiffWorkers is the number of files compared in parallel during the diff.
+	// 0 means the key was not set, leaving the choice to the sync package.
+	DiffWorkers int
 
 	ServiceStop             map[string]string
 	ServiceStart            map[string]string
@@ -66,12 +72,22 @@ func FromMap(props map[string]string) (*Config, error) {
 		return nil, err
 	}
 
+	cfg.DownloadParts, err = optionalPositiveInt(props, "download.parallel.parts")
+	if err != nil {
+		return nil, err
+	}
+
 	cfg.ProxyURL = props["proxy.url"]
 	cfg.ProxyUser = props["proxy.user"]
 	cfg.ProxyPassword = props["proxy.password"]
 	cfg.ProxyNoProxy = props["proxy.no_proxy"]
 
 	cfg.SyncDirectories, err = parseSyncDirectories(props["sync.directories"])
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.DiffWorkers, err = optionalPositiveInt(props, "diff.workers")
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +171,24 @@ func requiredPositiveInt(props map[string]string, key string) (int, error) {
 	v, ok := props[key]
 	if !ok || strings.TrimSpace(v) == "" {
 		return 0, fmt.Errorf("config: required key %q is missing or empty", key)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return 0, fmt.Errorf("config: key %q: not an integer: %q", key, v)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("config: key %q: must be > 0, got %d", key, n)
+	}
+	return n, nil
+}
+
+// optionalPositiveInt reads a key that may be absent. A missing or empty value
+// yields 0 ("unset"), letting the caller apply its own default; a present value
+// must still parse as an integer > 0.
+func optionalPositiveInt(props map[string]string, key string) (int, error) {
+	v, ok := props[key]
+	if !ok || strings.TrimSpace(v) == "" {
+		return 0, nil
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil {

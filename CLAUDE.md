@@ -1,7 +1,7 @@
 # tUPDATE — Projekt-Handoff & Arbeitsanleitung
 
 Dieses Dokument ist self-contained: Es reicht allein, um die Arbeit am Projekt fortzusetzen.
-Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.10.2** (2026-08-04).
+Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.11.0** (2026-08-19).
 
 ---
 
@@ -15,7 +15,7 @@ Ablauf: lädt ein Release-ZIP (Download oder `--zip`), entpackt, vergleicht (Dif
 laufenden Installation, fragt vor destruktiven Aktionen, stoppt optional den Service, macht
 Datei-Backup (+ optional DB-Dump via pg_dump), spielt das Update ein, startet den Service.
 
-- **Modul:** `updater` (Go 1.26.4). Einzige externe Dependency: `github.com/ulikunitz/xz` (pure-Go LZMA2). Plus `github.com/cespare/xxhash/v2`.
+- **Modul:** `updater` (Go 1.26.4). Einzige externe Dependency: `github.com/ulikunitz/xz` (pure-Go LZMA2). (`github.com/cespare/xxhash/v2` ist seit 0.11.0 raus — der Diff hasht nicht mehr, siehe unten.)
 - **Einstieg:** `cmd/updater/main.go` → `cmd/updater/run.go` (`runApp`).
 - **Lizenz:** Apache-2.0 (`LICENSE` = kanonischer Volltext, `NOTICE` = Copyright + Third-Party-Hinweise). Copyright 2026 Jörn Heid. Kommerz-/Proprietär-Nutzung erlaubt, Patent-Grant inklusive. Per-Datei-SPDX-Header bewusst NICHT gesetzt (Build-Tag-`//go:build`-Zeilen müssen ganz oben stehen → fragil); LICENSE/NOTICE decken das Repo ab.
 
@@ -80,26 +80,30 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 
 - `cmd/updater/main.go` — Flag-Vorparsing, Logfile öffnen, **stderr = `io.MultiWriter(os.Stderr, logFile)`** im Normalmodus (siehe Gotcha!), `--detach`-Spawn.
   - `openLogShared` plattformspezifisch: `logopen_windows.go` (CreateFile mit `FILE_SHARE_READ|WRITE|DELETE` → Log live lesbar/rotierbar), `logopen_other.go` (plain open).
-- `cmd/updater/run.go` — `runApp`, Flags (`flagSet`), Workflow, Help, Prompt-Verdrahtung. Wichtige Helper: `ttyProgress(f)`, `applyTicker(f)`, `isTerminal(*os.File)`, `resolveBackupOptions`, `fmtBytes`.
+- `cmd/updater/run.go` — `runApp`, Flags (`flagSet`), Workflow, Help, Prompt-Verdrahtung. Wichtige Helper: `ttyProgress(f)`, `applyTicker(f)`, `diffTicker(f)`, `isTerminal(*os.File)`, `resolveBackupOptions`, `resolveDownloadParts`, `resolveDiffWorkers`, `serviceRunState`, `fmtBytes`.
 - `internal/archive/` — `backup.go` (`BackupDirs(appRoot, backupDir, dirs, ts, BackupOptions, Progress)`, tar.xz + zip, `countingWriter`, Selbst-Einschluss-Guard), `options.go` (`BackupFormat`, `CompressionLevel`, Parser), `extract.go` (`Extract(zip, dst, Progress)`), `pgdump.go`, `backup.go`/`extract.go` Progress via gemeinsamen `Progress func(done,total int64)`.
-- `internal/sync/` — `diff.go`, `apply.go` (`Apply(refRoot, liveRoot, diffs, onFile func(string))`), `report.go` (`FormatReport(diffs, total, noDirs)`).
+- `internal/sync/` — `diff.go` (`Compute(refRoot, liveRoot, dirs, Options{Progress, Workers})`, `DiffDir`, Worker-Pool, `sameContent` als Block-Vergleich mit Early-Exit), `apply.go` (`Apply(refRoot, liveRoot, diffs, onFile func(string))`), `report.go` (`FormatReport(diffs, total, noDirs)`), `preflight.go`.
 - `internal/i18n/` — `i18n.go` (`Strings`-Struct, Bundles `en/de/fr`, `Get`, `ParseLang`, `Detect`), `detect_windows.go` (UI-Sprache via `GetUserDefaultUILanguage`), `detect_other.go` (no-op).
 - `internal/prompt/` — `Prompter` (`Confirm`, `ConfirmContinueOrShow`, `Choose(question, []Choice{Key,Label}, def)`), `Stdin`, `Always`.
 - `internal/machine/` — NDJSON-Emitter (`--json`).
-- `internal/config/`, `internal/download/`, `internal/service/`, `internal/paths/`.
+- `internal/download/` — `client.go` (`NewClient(timeout, ProxyConfig, ClientOptions{Parts})`), `download.go` (Range-Probe, Single-Stream, paralleler Range-Download, Part-Retry), `progress.go` (Ticker-basierte Statuszeile mit Rate + ETA).
+- `internal/config/`, `internal/service/`, `internal/paths/`.
 - `tools/mkicon/main.go` — Icon-Generator.
 
 ---
 
 ## 5. GOTCHAS (hier sind wir schon reingelaufen)
 
-1. **stderr ist ein `io.MultiWriter`, kein `*os.File`.** TTY-Erkennung/Progress MUSS gegen `os.Stderr` (echte Konsole) prüfen + schreiben, sonst nie sichtbar. Gilt für `ttyProgress` und `applyTicker`. `\r`-Animation geht NUR an `os.Stderr` → Logfile bleibt sauber. Aus bei `--json`, `--detach`, Nicht-TTY.
+1. **stderr ist ein `io.MultiWriter`, kein `*os.File`.** TTY-Erkennung/Progress MUSS gegen `os.Stderr` (echte Konsole) prüfen + schreiben, sonst nie sichtbar. Gilt für `ttyProgress`, `applyTicker` und `diffTicker`. `\r`-Animation geht NUR an `os.Stderr` → Logfile bleibt sauber. Aus bei `--json`, `--detach`, Nicht-TTY.
+   **Ausnahme (Altlast, unverändert):** Der *Download*-Progress hängt an `Downloader.Progress = stderr` (also am MultiWriter) und schreibt seine `\r`-Zeilen deshalb auch ins Logfile. War vor 0.11.0 schon so; bewusst nicht mitgeändert.
 2. **Make trackt `.go` nicht** → vor Release-Builds IMMER `make clean`, sonst werden v.a. darwin-Binaries nicht neu gebaut (alter Timestamp).
 3. **Backup-Selbst-Einschluss:** liegt `backup.directory` in einem `sync.directories`-Eintrag, würde der Walk die wachsende Archivdatei in sich packen → „läuft nie fertig". Guard: `skipDir = filepath.Clean(backupDir)` wird beim Walk übersprungen.
 4. **i18n-Reflection-Test** `TestGet_AllThreeBundlesPopulated` prüft, dass JEDES `Strings`-Feld in allen 3 Bundles nicht leer ist. Neues Feld → in en/de/fr setzen.
 5. **`internal/archive/pgdump_test.go`** ist seit jeher nicht gofmt-konform (NICHT von mir). `make fmt`/`gofmt -l` flaggt es — beim Prüfen eigener Änderungen rausfiltern, nicht „fixen" ohne Grund.
 6. **LZMA2 `max` (64 MiB Dict, BinaryTree)** ist single-threaded, ~0,7 GB RAM, sehr langsam auf großen Bäumen → Fortschritt wirkt eingefroren. Default ist deshalb `default` (8 MiB, HashTable).
-7. **`ctx7`-Regel:** Für Library-/CLI-/API-Fragen `npx ctx7@latest` nutzen (globale Nutzer-Regel). Hat bestätigt: pure-Go-**Schreiben** von echtem `.7z` existiert nicht (nur lesen). Daher tar.xz.
+7. **Diff-Vergleich hasht NICHT mehr** (seit 0.11.0). `sameContent` liest beide Dateien in 256-KiB-Blöcken lockstep und bricht beim ersten Unterschied ab (`bytes.Equal`). Kein xxhash mehr → Dependency raus. Wer hier „optimieren" will: ein mtime-Shortcut ist **verboten** — reproducible builds setzen feste/identische Zeitstempel, dann würde eine geänderte Datei gleicher Größe als unverändert durchrutschen.
+8. **`internal/sync` heißt `sync`** → die stdlib wird dort als `gosync "sync"` importiert. Nicht „aufräumen".
+9. **`ctx7`-Regel:** Für Library-/CLI-/API-Fragen `npx ctx7@latest` nutzen (globale Nutzer-Regel). Hat bestätigt: pure-Go-**Schreiben** von echtem `.7z` existiert nicht (nur lesen). Daher tar.xz.
 
 ---
 
@@ -116,14 +120,30 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 - **`--no-prompt` / Automation:** Defaults `tar.xz` / `default`. „Backup erstellen?" defaultet interaktiv auf **Ja**.
 - **Restore:** Tool spielt NICHT selbst zurück, gibt nur den Pfad aus. tar.xz manuell: `tar -xJf`.
 - **Preflight (Schreibrechte-/Lock-Check):** läuft nach Diff-Review, **vor dem Backup** (Dienst ist da schon gestoppt). `internal/sync/preflight.go::Preflight(liveRoot, diffs)` prüft mutationsfrei jeden Diff-Eintrag: Modified/Removed via `OpenFile(O_WRONLY)` ohne Trunc (fremder Lock/read-only → blockiert; repräsentativ fürs spätere `O_TRUNC`-Open in `apply.go`), Added via `CreateTemp` im nächsten existierenden Vorfahr-Ordner. Bei Treffern: Liste + `emit.PreflightFailed`, `maybeStartService()` (nichts mutiert → Dienst sauber zurück), **exit 8**. Verhindert Teil-Apply, wenn eine Zieldatei von Editor/Virenscanner/laufendem Dienst gehalten wird. Opt-out `--no-preflight` (Default an). **Rest-Lücke:** AV-Flacker-Race (Lock zwischen Probe und Apply) ungelöst → bräuchte zusätzlich Apply-Retry.
-- **Live-Anzeige:** Download-%, Entpacken-% (Statuszeile „Entpacken..." + `\r`-Balken nur Prozent), Backup-% , Apply = Dateipfade rauschen in einer `\r`-Zeile durch.
+- **Paralleler Download (0.11.0):** `--download-parts N` / `download.parallel.parts` (Default **4**, Max 16, `1` = aus). Ablauf in `internal/download`: Probe-GET mit `Range: bytes=0-0` → `206` + parsebares `Content-Range` ⇒ Server kann Ranges, Gesamtgröße bekannt; sonst Single-Stream (bei `200` wird der Probe-Body **wiederverwendet**, kein zweiter Request). Datei wird vorallokiert (`Truncate`), N Goroutines schreiben per `io.NewOffsetWriter` an ihren Offset. Pro Teil 3 Versuche mit Backoff, ein Retry setzt am erreichten Offset auf. Erster Fehler cancelt die anderen Teile.
+  - **Split nur ab 8 MiB pro Teil** (`minPartSize`), sonst kostet der Verbindungsaufbau mehr als er bringt.
+  - **HTTP/2 wird bei `Parts > 1` bewusst abgewählt** (`TLSClientConfig.NextProtos = ["http/1.1"]`): h2 multiplext alle „parallelen" Teile auf EINE TCP-Verbindung → Drosselung pro Verbindung und h2-Flow-Control würden den Gewinn auffressen. Bei `Parts == 1` bleibt `ForceAttemptHTTP2` an.
+  - Weiter: 1-MiB-Copy-Buffer statt 32 KiB, `ReadBufferSize` 256 KiB, **`f.Sync()` entfernt** (es ist eine Tempdatei, die sofort entpackt und gelöscht wird — fsync über hunderte MB war reine Wartezeit).
+  - **Erwartung:** 2–4× wenn der Server pro Verbindung drosselt oder die Leitung hohe Latenz hat. Limitiert der Server-Uplink, bringt es **nichts** — dafür zeigt die Statuszeile jetzt MB/s + ETA, damit man das unterscheiden kann. Loopback-Messung 250 MB: 1 Teil 0,81 s → 4 Teile 0,47 s.
+- **Schnellerer Diff (0.11.0):** Worker-Pool, `--diff-workers N` / `diff.workers` (Default `min(NumCPU, 8)`). Beide Bäume (ref + live) werden **gleichzeitig** gewalkt. `sameContent` vergleicht blockweise mit Early-Exit statt beide Dateien komplett zu hashen. Messung (2000 Dateien × 128 KiB, warm, M-Serie, Unterschiede absichtlich im *letzten* Byte = Worst Case fürs Early-Exit): alt 139 ms → neu seriell 104 ms → neu mit 8 Workern **48 ms** (~2,9×). Auf Netzlaufwerken/HDD ggf. `diff.workers = 1..2`.
+- **Live-Anzeige:** Download-% + **MB/s + ETA**, Entpacken-% (Statuszeile „Entpacken..." + `\r`-Balken nur Prozent), **Diff** (`diffTicker`: Listing-Phase = laufender Dateizähler, Vergleichsphase = echte Prozent pro sync-Verzeichnis), Backup-%, Apply = Dateipfade rauschen in einer `\r`-Zeile durch.
 - **i18n:** de/en/fr. `Detect()`: erst Env (`LC_ALL`/`LC_MESSAGES`/`LANG`), dann OS-nativ (Windows-UI-Sprache, da cmd keine Locale-Env setzt), sonst en. `--lang de|en|fr` erzwingt.
-- **Weitere Flags:** `--zip`, `--config`, `--app-root`, `--dry-run` (Pre-Flight-Checks), `--skip-service`, `--ignore-service-errors`, `--no-files-backup`, `--no-db-backup`, `--no-preflight`, `--no-prompt`, `--detach`, `--logfile`, `--json`, `--lang`, `--version`.
+- **Service wird nur gestartet, wenn tUPDATE ihn gestoppt hat (0.11.0).** Vor dem Stop fragt `serviceRunState(goos, stopCmd)` den Manager (launchctl/systemctl/net→sc) nach dem Ist-Zustand — Tri-State `serviceRunning | serviceStopped | serviceUnknown`:
+  - `stopped` → Stop wird übersprungen (`service_stop_skipped`, reason `not_running`), am Ende **kein** Start. Löst das eigentliche Problem: das Stop-Kommando gibt auch bei bereits gestopptem Dienst 0 zurück, das sah vorher aus wie „wir haben gestoppt".
+  - `running` → wie bisher stoppen; Erfolg setzt `serviceWasStopped = true`.
+  - `unknown` → interaktive Rückfrage „Service trotzdem stoppen?" (Default **ja**). Unter `--no-prompt` liefert `prompt.Always{true}` das Ja ⇒ altes Verhalten für Automation.
+  - Stop schlägt fehl + Nutzer macht weiter ⇒ `serviceWasStopped = false` ⇒ am Ende **kein** Start.
+  - Alle Start-Stellen (Abbruchpfade + Erfolgspfad) laufen jetzt über **eine** Closure `maybeStartService()` (`startSkipped|startOK|startFailed`), die auch die NDJSON-Events feuert. Vorher hatte der Erfolgspfad seinen eigenen Block und prüfte nur `!f.skipService` — das war Lücke Nr. 2.
+  - Escape-Hatch: **`--force-start-service`** startet am Ende immer (außer `--skip-service` / `--dry-run`).
+  - Neue NDJSON-Events: `service_stop_skipped`, `service_start_skipped`.
+  - `probeServiceRunning` existiert weiter als dünner Adapter für den Dry-Run-Check (`unknown` ⇒ ok).
+- **Weitere Flags:** `--zip`, `--config`, `--app-root`, `--dry-run` (Pre-Flight-Checks), `--skip-service`, `--ignore-service-errors`, `--force-start-service`, `--download-parts`, `--diff-workers`, `--no-files-backup`, `--no-db-backup`, `--no-preflight`, `--no-prompt`, `--detach`, `--logfile`, `--json`, `--lang`, `--version`.
 
 ---
 
 ## 7. Versionshistorie (Kurz)
 
+- **0.11.0** (a) **Download parallelisiert**: N Range-Requests (`--download-parts`, Default 4), Part-Retry mit Offset-Resume, 1-MiB-Buffer, kein `f.Sync()` mehr, h2 bei Parallelbetrieb abgewählt; Statuszeile mit MB/s + ETA. (b) **Dienst wird nur noch gestartet, wenn tUPDATE ihn gestoppt hat** — Tri-State-Statusprobe vor dem Stop, Rückfrage bei unklarem Status, `--force-start-service` als Escape-Hatch, neue Events `service_stop_skipped`/`service_start_skipped`. (c) **Diff-Fortschritt sichtbar** (`diffTicker`). (d) **Diff schneller**: Worker-Pool (`--diff-workers`, Default `min(NumCPU,8)`), parallele Baum-Walks, Block-Vergleich mit Early-Exit statt Doppel-Hash → xxhash-Dependency entfällt.
 - **0.10.2** Fix: Signaturkette unvollständig — nur das Leaf steckte im Signaturblock, weil `-pkcs11cert` das `-certs`-Chain-File aussticht. Windows zeigte deshalb trotz gültiger Signatur „Unbekannter Herausgeber" im UAC-Dialog. `tools/sign-windows.sh` gibt das Intermediate jetzt per `-ac signing/inter.pem` mit und zählt nach dem Signieren die Zerts im Block (`<2` → Abbruch). Verify gegen `signing/root.pem` allein: ok.
 - **0.10.1** Windows-Binaries (`amd64`/`arm64`) Authenticode-signiert (Certum Open Source Code Signing, SimplySign-Cloud-HSM). Neues `make sign` (`tools/sign-windows.sh`): dynamische Cert-ID via `pkcs11-tool`, RFC3161-Timestamp (`time.certum.pl`), läuft nach `upx-all`. `signing/` gitignored. Beseitigt „Unknown publisher" (UAC), baut SmartScreen-Reputation.
 - **0.10.0** Preflight-Schreibrechte-/Lock-Check vor Apply (`internal/sync/preflight.go`): bricht mit exit 8 ab, wenn eine Zieldatei gesperrt/read-only/nicht anlegbar ist → kein Teil-Apply. Opt-out `--no-preflight`. Neues `preflight_failed`-NDJSON-Event.
@@ -143,6 +163,7 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 
 - **Nutzer testet UAC-Herausgeber auf Windows** mit 0.10.2: erwartet „Verifizierter Herausgeber: Open Source Developer Heid Jörn" statt „Unbekannter Herausgeber". **Rückmeldung steht noch aus.** Die v0.10.1-Release-Assets tragen weiterhin die unvollständige Kette — nicht mehr verteilen.
 - **Version-Resource ist stale:** `cmd/updater/versioninfo.json` steht fest auf `0.1.0.0`, CompanyName/LegalCopyright = `tUPDATE`. Datei-Eigenschaften → Details zeigen also weder die echte Version noch den Namen. Nicht sicherheitsrelevant (Herausgeber kommt aus der Signatur), aber kosmetisch offen; Fix hieße `versioninfo.json` aus `VERSION` generieren.
+- **Neu offen (0.11.0):** Paralleler Download + schnellerer Diff sind auf diesem Mac gemessen, aber **nicht auf dem echten Zielserver** verifiziert. Beim ersten Praxistest prüfen: (1) beantwortet der Release-Server Range-Requests (sonst still Single-Stream, sichtbar an fehlendem Speedup)? (2) MB/s-Anzeige — bleibt sie bei mehr Teilen gleich, limitiert der Server-Uplink und `--download-parts` bringt nichts. (3) Liegt die Installation auf einem Netzlaufwerk/HDD, ggf. `diff.workers = 1` oder `2` setzen.
 - **Nutzer testet Backup-Hang auf Windows** mit Stufe `min` (Release 0.9.1+). Erwartung: Balken läuft zügig → war reine `max`-Rechenzeit. Falls trotz `min` bei 0 % → echter Bug, dann an `internal/archive/backup.go` (`writeTarXzBackup`) ansetzen. **Rückmeldung steht noch aus.**
 - **Icon-Anzeige auf echtem Windows** ungeprüft (kein Windows hier). Einbettung + Build verifiziert; UPX behält Icon/Version-Resourcen normalerweise sichtbar.
 - **Apply-Retry (Option A)** offen: Preflight (0.10.0) deckt steady-state-Locks ab, aber Virenscanner-Flacker zwischen Probe und `sync.Apply` bleibt ein Race → bei Bedarf Retry mit Backoff in `internal/sync/apply.go::copyFile`/`os.Remove` ergänzen.

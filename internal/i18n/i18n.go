@@ -63,6 +63,18 @@ type Strings struct {
 	ServiceStarting   string // "Starting service:"
 	ServiceStartError string
 	ServiceStarted    string // "Service started."
+	// ServiceNotRunning: the manager reports the service is already down, so
+	// the stop step is skipped and no start will follow.
+	ServiceNotRunning string
+	// ServiceStateUnknown: the run-state probe was inconclusive.
+	ServiceStateUnknown string
+	// ServiceStopAnywayQuestion follows ServiceStateUnknown; default is yes.
+	ServiceStopAnywayQuestion string
+	// ServiceStartSkipped: tUPDATE did not stop the service, so it does not
+	// start it either.
+	ServiceStartSkipped string
+	// ServiceStartForced: --force-start-service overrides that rule.
+	ServiceStartForced string
 
 	// Diff
 	ComputingDiff   string
@@ -140,6 +152,12 @@ var en = Strings{
 	ServiceStartError: "Service start error:",
 	ServiceStarted:    "Service started.",
 
+	ServiceNotRunning:         "Service is not running - stop skipped:",
+	ServiceStateUnknown:       "Could not determine service state:",
+	ServiceStopAnywayQuestion: "Stop the service anyway?",
+	ServiceStartSkipped:       "Service was not stopped by tUPDATE - start skipped.",
+	ServiceStartForced:        "--force-start-service: starting the service although tUPDATE did not stop it.",
+
 	ComputingDiff:   "Computing diff...",
 	DiffError:       "Diff error:",
 	DryRunDone:      "Dry run finished, no changes made.",
@@ -212,6 +230,12 @@ var de = Strings{
 	ServiceStartError: "Service-Start-Fehler:",
 	ServiceStarted:    "Service gestartet.",
 
+	ServiceNotRunning:         "Service läuft nicht - Stopp übersprungen:",
+	ServiceStateUnknown:       "Service-Status nicht ermittelbar:",
+	ServiceStopAnywayQuestion: "Service trotzdem stoppen?",
+	ServiceStartSkipped:       "Service wurde nicht von tUPDATE gestoppt - Start übersprungen.",
+	ServiceStartForced:        "--force-start-service: Service wird gestartet, obwohl tUPDATE ihn nicht gestoppt hat.",
+
 	ComputingDiff:   "Diff berechnen...",
 	DiffError:       "Diff-Fehler:",
 	DryRunDone:      "Dry-Run beendet, keine Änderungen.",
@@ -283,6 +307,12 @@ var fr = Strings{
 	ServiceStarting:   "Démarrage du service :",
 	ServiceStartError: "Erreur de démarrage du service :",
 	ServiceStarted:    "Service démarré.",
+
+	ServiceNotRunning:         "Le service n'est pas en cours d'exécution - arrêt ignoré :",
+	ServiceStateUnknown:       "Impossible de déterminer l'état du service :",
+	ServiceStopAnywayQuestion: "Arrêter le service malgré tout ?",
+	ServiceStartSkipped:       "Le service n'a pas été arrêté par tUPDATE - démarrage ignoré.",
+	ServiceStartForced:        "--force-start-service : démarrage du service bien que tUPDATE ne l'ait pas arrêté.",
 
 	ComputingDiff:   "Calcul du diff...",
 	DiffError:       "Erreur de diff :",

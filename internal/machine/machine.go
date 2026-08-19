@@ -185,6 +185,13 @@ func (e *Emitter) ServiceStopFailed(reason string) {
 	e.emit(map[string]any{"event": "service_stop_failed", "reason": reason})
 }
 
+// ServiceStopSkipped reports that no stop command was run at all: the service
+// manager said the service is not running ("not_running"), or the operator
+// declined stopping it after an inconclusive status probe ("user_declined").
+func (e *Emitter) ServiceStopSkipped(reason string) {
+	e.emit(map[string]any{"event": "service_stop_skipped", "reason": reason})
+}
+
 // ServiceStartOK / ServiceStartFailed cover the post-apply service-start step.
 func (e *Emitter) ServiceStartOK() {
 	e.emit(map[string]any{"event": "service_start_ok"})
@@ -192,6 +199,12 @@ func (e *Emitter) ServiceStartOK() {
 
 func (e *Emitter) ServiceStartFailed(reason string) {
 	e.emit(map[string]any{"event": "service_start_failed", "reason": reason})
+}
+
+// ServiceStartSkipped reports that the service was deliberately left alone
+// because tUPDATE never stopped it ("not_stopped_by_updater").
+func (e *Emitter) ServiceStartSkipped(reason string) {
+	e.emit(map[string]any{"event": "service_start_skipped", "reason": reason})
 }
 
 // ApplyOK / ApplyFailed cover the file-sync step.

@@ -1,6 +1,7 @@
 package download
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -17,14 +18,43 @@ type ProxyConfig struct {
 	NoProxy  string
 }
 
-// NewClient builds an *http.Client honouring the given timeout and proxy config.
-func NewClient(timeout time.Duration, p ProxyConfig) (*http.Client, error) {
+// ClientOptions tunes the transport beyond proxying.
+type ClientOptions struct {
+	// Parts is the number of parallel range requests the caller intends to
+	// run. Values above 1 raise the per-host connection limits and switch the
+	// transport to HTTP/1.1 (see NewClient). Zero or 1 keeps the plain
+	// single-connection setup.
+	Parts int
+}
+
+// NewClient builds an *http.Client honouring the given timeout, proxy config
+// and parallelism.
+func NewClient(timeout time.Duration, p ProxyConfig, o ClientOptions) (*http.Client, error) {
+	conns := o.Parts
+	if conns < 1 {
+		conns = 1
+	}
+
 	transport := &http.Transport{
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          10,
-		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		ForceAttemptHTTP2:   conns == 1,
+		MaxIdleConns:        conns * 2,
+		MaxIdleConnsPerHost: conns,
+		IdleConnTimeout:     30 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		// io.CopyBuffer moves the body 1 MiB at a time; the default 4 KiB
+		// socket buffer would chop that into needless syscalls.
+		ReadBufferSize:        256 << 10,
+		WriteBufferSize:       64 << 10,
 		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	if conns > 1 {
+		// HTTP/2 multiplexes every "parallel" part onto one TCP connection,
+		// which defeats the purpose: per-connection shaping upstream and h2
+		// stream flow control would still cap us at single-stream throughput.
+		// Declining the h2 ALPN offer yields `conns` real connections, and
+		// every HTTPS server can serve HTTP/1.1.
+		transport.TLSClientConfig = &tls.Config{NextProtos: []string{"http/1.1"}}
 	}
 
 	if strings.TrimSpace(p.URL) != "" {

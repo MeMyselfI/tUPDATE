@@ -40,23 +40,23 @@ func TestParseServiceTarget(t *testing.T) {
 
 func TestInterpretLaunchctl(t *testing.T) {
 	tests := []struct {
-		name    string
-		out     string
-		runErr  error
-		wantOK  bool
-		wantSub string
+		name      string
+		out       string
+		runErr    error
+		wantState serviceState
+		wantSub   string
 	}{
-		{"loaded with PID", "{\n\t\"PID\" = 4321;\n}", nil, true, "running"},
-		{"loaded no PID", "{\n\t\"LastExitStatus\" = 0;\n}", nil, false, "not running"},
-		{"not loaded (exit err)", "Could not find service", errors.New("exit 113"), false, "not loaded"},
-		{"empty unparseable", "", nil, true, "inconclusive"},
+		{"loaded with PID", "{\n\t\"PID\" = 4321;\n}", nil, serviceRunning, "running"},
+		{"loaded no PID", "{\n\t\"LastExitStatus\" = 0;\n}", nil, serviceStopped, "not running"},
+		{"not loaded (exit err)", "Could not find service", errors.New("exit 113"), serviceStopped, "not loaded"},
+		{"empty unparseable", "", nil, serviceUnknown, "inconclusive"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, detail := interpretLaunchctl(tc.out, tc.runErr)
-			if ok != tc.wantOK || !strings.Contains(detail, tc.wantSub) {
-				t.Errorf("interpretLaunchctl = (%v, %q), want ok=%v containing %q",
-					ok, detail, tc.wantOK, tc.wantSub)
+			state, detail := interpretLaunchctl(tc.out, tc.runErr)
+			if state != tc.wantState || !strings.Contains(detail, tc.wantSub) {
+				t.Errorf("interpretLaunchctl = (%v, %q), want state=%v containing %q",
+					state, detail, tc.wantState, tc.wantSub)
 			}
 		})
 	}
@@ -64,26 +64,26 @@ func TestInterpretLaunchctl(t *testing.T) {
 
 func TestInterpretSystemctl(t *testing.T) {
 	tests := []struct {
-		name    string
-		out     string
-		wantOK  bool
-		wantSub string
+		name      string
+		out       string
+		wantState serviceState
+		wantSub   string
 	}{
-		{"active", "active", true, "running"},
-		{"activating", "activating", true, "running"},
-		{"inactive", "inactive", false, "not running"},
-		{"failed", "failed", false, "not running"},
-		{"unknown state", "unknown", true, "inconclusive"},
-		{"empty", "", true, "inconclusive"},
-		{"trailing newline", "active\n", true, "running"},
-		{"multi-unit first wins", "inactive\nactive", false, "not running"},
+		{"active", "active", serviceRunning, "running"},
+		{"activating", "activating", serviceRunning, "running"},
+		{"inactive", "inactive", serviceStopped, "not running"},
+		{"failed", "failed", serviceStopped, "not running"},
+		{"unknown state", "unknown", serviceUnknown, "inconclusive"},
+		{"empty", "", serviceUnknown, "inconclusive"},
+		{"trailing newline", "active\n", serviceRunning, "running"},
+		{"multi-unit first wins", "inactive\nactive", serviceStopped, "not running"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, detail := interpretSystemctl(tc.out)
-			if ok != tc.wantOK || !strings.Contains(detail, tc.wantSub) {
-				t.Errorf("interpretSystemctl(%q) = (%v, %q), want ok=%v containing %q",
-					tc.out, ok, detail, tc.wantOK, tc.wantSub)
+			state, detail := interpretSystemctl(tc.out)
+			if state != tc.wantState || !strings.Contains(detail, tc.wantSub) {
+				t.Errorf("interpretSystemctl(%q) = (%v, %q), want state=%v containing %q",
+					tc.out, state, detail, tc.wantState, tc.wantSub)
 			}
 		})
 	}
@@ -91,31 +91,31 @@ func TestInterpretSystemctl(t *testing.T) {
 
 func TestInterpretSc(t *testing.T) {
 	tests := []struct {
-		name    string
-		out     string
-		runErr  error
-		wantOK  bool
-		wantSub string
+		name      string
+		out       string
+		runErr    error
+		wantState serviceState
+		wantSub   string
 	}{
-		{"running", "        STATE              : 4  RUNNING", nil, true, "running"},
-		{"stopped", "        STATE              : 1  STOPPED", nil, false, "not running"},
-		{"start pending", "        STATE              : 2  START_PENDING", nil, true, "running"},
-		{"not found", "[SC] EnumQueryServicesStatus:OpenService FAILED 1060:", errors.New("exit 1"), false, "not found"},
-		{"garbage", "???", nil, true, "inconclusive"},
+		{"running", "        STATE              : 4  RUNNING", nil, serviceRunning, "running"},
+		{"stopped", "        STATE              : 1  STOPPED", nil, serviceStopped, "not running"},
+		{"start pending", "        STATE              : 2  START_PENDING", nil, serviceRunning, "running"},
+		{"not found", "[SC] EnumQueryServicesStatus:OpenService FAILED 1060:", errors.New("exit 1"), serviceStopped, "not found"},
+		{"garbage", "???", nil, serviceUnknown, "inconclusive"},
 		// German Windows: state words are localized, the numeric code is not.
-		{"german running", "        ZUSTAND            : 4  WIRD AUSGEFÜHRT", nil, true, "running"},
-		{"german stopped", "        ZUSTAND            : 1  BEENDET", nil, false, "not running"},
+		{"german running", "        ZUSTAND            : 4  WIRD AUSGEFÜHRT", nil, serviceRunning, "running"},
+		{"german stopped", "        ZUSTAND            : 1  BEENDET", nil, serviceStopped, "not running"},
 		// PID / TYPE numbers on other lines must not be mistaken for a state.
-		{"only pid line", "        PROCESS_ID         : 1234", nil, true, "inconclusive"},
+		{"only pid line", "        PROCESS_ID         : 1234", nil, serviceUnknown, "inconclusive"},
 		// paused (7) is ambiguous → inconclusive, not a false "stopped".
-		{"paused", "        STATE              : 7  PAUSED", nil, true, "inconclusive"},
+		{"paused", "        STATE              : 7  PAUSED", nil, serviceUnknown, "inconclusive"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, detail := interpretSc(tc.out, tc.runErr)
-			if ok != tc.wantOK || !strings.Contains(detail, tc.wantSub) {
-				t.Errorf("interpretSc = (%v, %q), want ok=%v containing %q",
-					ok, detail, tc.wantOK, tc.wantSub)
+			state, detail := interpretSc(tc.out, tc.runErr)
+			if state != tc.wantState || !strings.Contains(detail, tc.wantSub) {
+				t.Errorf("interpretSc = (%v, %q), want state=%v containing %q",
+					state, detail, tc.wantState, tc.wantSub)
 			}
 		})
 	}
