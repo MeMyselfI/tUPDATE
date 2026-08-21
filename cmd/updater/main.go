@@ -75,6 +75,16 @@ func main() {
 	if !f.jsonOut {
 		fmt.Fprintf(logFile, s.EndedMarker+"\n", code, time.Now().Format(time.RFC3339))
 	}
+
+	// Double-clicked on Windows the console window is ours alone and vanishes
+	// on exit, so a clean run would flash by unread. Count down first, and let
+	// Enter cut it short. Failures skip this: the window stays up so the error
+	// remains readable. The countdown goes to os.Stderr (the real console),
+	// never the MultiWriter, so its \r frames stay out of the logfile.
+	if code == exitOK && !f.jsonOut && !f.detach && isTerminal(os.Stderr) && ownsConsole() {
+		waitBeforeClose(os.Stderr, os.Stdin, f.closeDelay, s.ConsoleClosing)
+	}
+
 	os.Exit(code)
 }
 

@@ -55,6 +55,7 @@ type flagSet struct {
 	forceStartService   bool
 	downloadParts       int
 	diffWorkers         int
+	closeDelay          int
 	detach              bool
 	jsonOut             bool
 	lang                string
@@ -1230,6 +1231,7 @@ func parseFlags(args []string, stdout, stderr io.Writer) (*flagSet, error) {
 	fs.BoolVar(&f.forceStartService, "force-start-service", false, "Service am Ende immer starten, auch wenn tUPDATE ihn nicht gestoppt hat / always start the service at the end")
 	fs.IntVar(&f.downloadParts, "download-parts", 0, "parallele Download-Verbindungen, 1 = aus (Default: download.parallel.parts, sonst 4)")
 	fs.IntVar(&f.diffWorkers, "diff-workers", 0, "parallel verglichene Dateien beim Diff (Default: diff.workers, sonst min(CPUs, 8))")
+	fs.IntVar(&f.closeDelay, "close-delay", 10, "Sekunden Countdown vor dem Schliessen des Doppelklick-Fensters (Windows), 0 = aus / countdown before closing the double-click console window")
 	fs.BoolVar(&f.jsonOut, "json", false, "NDJSON-Events auf stdout (setzt --no-prompt voraus) / NDJSON events on stdout")
 	fs.StringVar(&f.lang, "lang", "", "UI-Sprache erzwingen: de | en | fr (Default: aus Env)")
 	fs.StringVar(&f.backupFormat, "backup-format", "", "Backup-Format: zip | tar.xz (Default: interaktiv fragen, sonst tar.xz)")
@@ -1320,6 +1322,8 @@ DRY-RUN-CHECKS
 
 MISC
   --version                Version anzeigen / show version
+  --close-delay <n>        Countdown (s) vor dem Schliessen des Doppelklick-Fensters,
+                           0 = aus; nur Windows + Erfolg (Default: 10)
   --help                   diese Hilfe / this help
 
 EXAMPLES

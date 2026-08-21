@@ -1,7 +1,7 @@
 # tUPDATE — Projekt-Handoff & Arbeitsanleitung
 
 Dieses Dokument ist self-contained: Es reicht allein, um die Arbeit am Projekt fortzusetzen.
-Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.11.0** (2026-08-19).
+Es wird mit dem Repo (GitHub) gesichert. Letzter Stand: **0.11.1** (2026-08-21).
 
 ---
 
@@ -137,12 +137,18 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
   - Escape-Hatch: **`--force-start-service`** startet am Ende immer (außer `--skip-service` / `--dry-run`).
   - Neue NDJSON-Events: `service_stop_skipped`, `service_start_skipped`.
   - `probeServiceRunning` existiert weiter als dünner Adapter für den Dry-Run-Check (`unknown` ⇒ ok).
-- **Weitere Flags:** `--zip`, `--config`, `--app-root`, `--dry-run` (Pre-Flight-Checks), `--skip-service`, `--ignore-service-errors`, `--force-start-service`, `--download-parts`, `--diff-workers`, `--no-files-backup`, `--no-db-backup`, `--no-preflight`, `--no-prompt`, `--detach`, `--logfile`, `--json`, `--lang`, `--version`.
+- **Auto-Close bei Doppelklick (Windows):** Nach einem **fehlerfreien** Lauf (`exit 0`) zählt eine `\r`-Zeile 10 s runter und das Fenster schließt sich; **Enter schließt sofort**. Nur wenn das Konsolenfenster uns allein gehört — `ownsConsole()` in `cmd/updater/console_windows.go` fragt `kernel32!GetConsoleProcessList` (via `syscall.NewLazyDLL`, stdlib): Rückgabe `1` = nur unser Prozess hängt dran ⇒ Explorer hat das Fenster für uns erzeugt. Aus `cmd`/PowerShell/Terminal gestartet hängt die Shell mit dran (≥2) ⇒ kein Countdown, `0` (keine Konsole) ebenso. `console_other.go` (`//go:build !windows`) gibt immer `false`.
+  - Weitere Bedingungen (in `main.go` nach `runApp`): `!--json`, `!--detach`, `isTerminal(os.Stderr)`. Bei **Fehler-Exit bewusst KEIN Countdown** — Fenster bleibt offen, Meldung lesbar.
+  - Dauer: `--close-delay N` (Default **10**, `0` = aus).
+  - Ausgabe geht an `os.Stderr`, **nicht** an den MultiWriter (Gotcha #1) → `\r`-Frames bleiben aus dem Logfile.
+  - Code: `cmd/updater/countdown.go` — `closeCountdown(w, keys, ticks, secs, format)` ist bewusst mit injizierten `keys`/`ticks`-Channels gebaut, damit Tests ohne echtes Sleep laufen; `waitBeforeClose` verdrahtet `time.Ticker` + eine stdin-Goroutine (wird nie gejoined — der Prozess exitet direkt danach). i18n-Feld `ConsoleClosing`.
+- **Weitere Flags:** `--zip`, `--config`, `--app-root`, `--dry-run` (Pre-Flight-Checks), `--skip-service`, `--ignore-service-errors`, `--force-start-service`, `--download-parts`, `--diff-workers`, `--no-files-backup`, `--no-db-backup`, `--no-preflight`, `--close-delay`, `--no-prompt`, `--detach`, `--logfile`, `--json`, `--lang`, `--version`.
 
 ---
 
 ## 7. Versionshistorie (Kurz)
 
+- **0.11.1** Doppelklick-Fenster auf Windows schliesst sich nach fehlerfreiem Lauf selbst: 10-s-Countdown (`--close-delay N`, `0` = aus), Enter schliesst sofort. Nur wenn das Konsolenfenster uns allein gehoert (`ownsConsole()` via `kernel32!GetConsoleProcessList` == 1); aus einer Shell gestartet passiert nichts. Bei Fehler-Exit bleibt das Fenster offen. Neues i18n-Feld `ConsoleClosing`.
 - **0.11.0** (a) **Download parallelisiert**: N Range-Requests (`--download-parts`, Default 4), Part-Retry mit Offset-Resume, 1-MiB-Buffer, kein `f.Sync()` mehr, h2 bei Parallelbetrieb abgewählt; Statuszeile mit MB/s + ETA. (b) **Dienst wird nur noch gestartet, wenn tUPDATE ihn gestoppt hat** — Tri-State-Statusprobe vor dem Stop, Rückfrage bei unklarem Status, `--force-start-service` als Escape-Hatch, neue Events `service_stop_skipped`/`service_start_skipped`. (c) **Diff-Fortschritt sichtbar** (`diffTicker`). (d) **Diff schneller**: Worker-Pool (`--diff-workers`, Default `min(NumCPU,8)`), parallele Baum-Walks, Block-Vergleich mit Early-Exit statt Doppel-Hash → xxhash-Dependency entfällt.
 - **0.10.2** Fix: Signaturkette unvollständig — nur das Leaf steckte im Signaturblock, weil `-pkcs11cert` das `-certs`-Chain-File aussticht. Windows zeigte deshalb trotz gültiger Signatur „Unbekannter Herausgeber" im UAC-Dialog. `tools/sign-windows.sh` gibt das Intermediate jetzt per `-ac signing/inter.pem` mit und zählt nach dem Signieren die Zerts im Block (`<2` → Abbruch). Verify gegen `signing/root.pem` allein: ok.
 - **0.10.1** Windows-Binaries (`amd64`/`arm64`) Authenticode-signiert (Certum Open Source Code Signing, SimplySign-Cloud-HSM). Neues `make sign` (`tools/sign-windows.sh`): dynamische Cert-ID via `pkcs11-tool`, RFC3161-Timestamp (`time.certum.pl`), läuft nach `upx-all`. `signing/` gitignored. Beseitigt „Unknown publisher" (UAC), baut SmartScreen-Reputation.

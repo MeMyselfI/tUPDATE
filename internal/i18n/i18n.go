@@ -38,6 +38,10 @@ type Strings struct {
 	LogfileLabel  string // "Logfile:"
 	StartedMarker string // "=== updater %s started: %s ==="
 	EndedMarker   string // "=== updater ended: exit=%d, %s ==="
+	// ConsoleClosing is the \r-redrawn countdown shown only when the console
+	// window belongs to us (double-clicked .exe on Windows) and the run
+	// succeeded. Takes the remaining seconds.
+	ConsoleClosing string
 
 	// Errors / status
 	LogfileError           string
@@ -124,10 +128,11 @@ type Strings struct {
 }
 
 var en = Strings{
-	BetaWarning:   "!!! WARNING: This tool is in BETA. Use with caution and make sure you have a backup before running it. !!!",
-	LogfileLabel:  "Logfile:",
-	StartedMarker: "=== updater %s started: %s ===",
-	EndedMarker:   "=== updater ended: exit=%d, %s ===",
+	BetaWarning:    "!!! WARNING: This tool is in BETA. Use with caution and make sure you have a backup before running it. !!!",
+	LogfileLabel:   "Logfile:",
+	StartedMarker:  "=== updater %s started: %s ===",
+	EndedMarker:    "=== updater ended: exit=%d, %s ===",
+	ConsoleClosing: "Window closes in %d s... (Enter = close now)",
 
 	LogfileError:           "Logfile error:",
 	ConfigError:            "Config error:",
@@ -202,10 +207,11 @@ var en = Strings{
 }
 
 var de = Strings{
-	BetaWarning:   "!!! WARNUNG: Dieses Tool befindet sich in der BETA-Phase. Vorsichtig verwenden und vorher unbedingt sichern. !!!",
-	LogfileLabel:  "Logfile:",
-	StartedMarker: "=== updater %s gestartet: %s ===",
-	EndedMarker:   "=== updater beendet: exit=%d, %s ===",
+	BetaWarning:    "!!! WARNUNG: Dieses Tool befindet sich in der BETA-Phase. Vorsichtig verwenden und vorher unbedingt sichern. !!!",
+	LogfileLabel:   "Logfile:",
+	StartedMarker:  "=== updater %s gestartet: %s ===",
+	EndedMarker:    "=== updater beendet: exit=%d, %s ===",
+	ConsoleClosing: "Fenster schliesst in %d s... (Enter = sofort schliessen)",
 
 	LogfileError:           "Logfile-Fehler:",
 	ConfigError:            "Config-Fehler:",
@@ -280,10 +286,11 @@ var de = Strings{
 }
 
 var fr = Strings{
-	BetaWarning:   "!!! AVERTISSEMENT : Cet outil est en BÊTA. Utilisez-le avec précaution et effectuez une sauvegarde au préalable. !!!",
-	LogfileLabel:  "Fichier de log :",
-	StartedMarker: "=== updater %s démarré : %s ===",
-	EndedMarker:   "=== updater terminé : exit=%d, %s ===",
+	BetaWarning:    "!!! AVERTISSEMENT : Cet outil est en BÊTA. Utilisez-le avec précaution et effectuez une sauvegarde au préalable. !!!",
+	LogfileLabel:   "Fichier de log :",
+	StartedMarker:  "=== updater %s démarré : %s ===",
+	EndedMarker:    "=== updater terminé : exit=%d, %s ===",
+	ConsoleClosing: "Fenêtre se ferme dans %d s... (Entrée = fermer maintenant)",
 
 	LogfileError:           "Erreur de fichier de log :",
 	ConfigError:            "Erreur de configuration :",
