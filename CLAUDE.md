@@ -103,7 +103,9 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 6. **LZMA2 `max` (64 MiB Dict, BinaryTree)** ist single-threaded, ~0,7 GB RAM, sehr langsam auf großen Bäumen → Fortschritt wirkt eingefroren. Default ist deshalb `default` (8 MiB, HashTable).
 7. **Diff-Vergleich hasht NICHT mehr** (seit 0.11.0). `sameContent` liest beide Dateien in 256-KiB-Blöcken lockstep und bricht beim ersten Unterschied ab (`bytes.Equal`). Kein xxhash mehr → Dependency raus. Wer hier „optimieren" will: ein mtime-Shortcut ist **verboten** — reproducible builds setzen feste/identische Zeitstempel, dann würde eine geänderte Datei gleicher Größe als unverändert durchrutschen.
 8. **`internal/sync` heißt `sync`** → die stdlib wird dort als `gosync "sync"` importiert. Nicht „aufräumen".
-9. **`ctx7`-Regel:** Für Library-/CLI-/API-Fragen `npx ctx7@latest` nutzen (globale Nutzer-Regel). Hat bestätigt: pure-Go-**Schreiben** von echtem `.7z` existiert nicht (nur lesen). Daher tar.xz.
+9. **Properties-Parser kennt KEINE Fortsetzungszeilen.** `internal/config/properties.go` liest strikt eine Zeile = ein Eintrag; ein `\` am Zeilenende ist einfach Teil des Werts. Die lange tEXAM-`conf.files`-Liste muss deshalb einzeilig bleiben (steht so auch als Kommentar in `conf/updater.properties`).
+10. **`BackupDirs` schreibt Bodies exakt in Stat-Grösse.** Seit 0.12.0 werden Entries vorab gesammelt (`collectEntries`), Header also aus einem früheren `Stat`. `tar.Writer` bricht ab, wenn der Body kürzer ODER länger ist als der Header sagt — deshalb `io.CopyN` + Zero-Padding in `copyIntoArchive`. Nicht „vereinfachen" zurück auf `io.Copy`.
+11. **`ctx7`-Regel:** Für Library-/CLI-/API-Fragen `npx ctx7@latest` nutzen (globale Nutzer-Regel). Hat bestätigt: pure-Go-**Schreiben** von echtem `.7z` existiert nicht (nur lesen). Daher tar.xz.
 
 ---
 
@@ -179,7 +181,8 @@ gh release create vX.Y.Z dist/updater-* --target main --title "tUPDATE X.Y.Z" --
 - **Nutzer testet Backup-Hang auf Windows** mit Stufe `min` (Release 0.9.1+). Erwartung: Balken läuft zügig → war reine `max`-Rechenzeit. Falls trotz `min` bei 0 % → echter Bug, dann an `internal/archive/backup.go` (`writeTarXzBackup`) ansetzen. **Rückmeldung steht noch aus.**
 - **Icon-Anzeige auf echtem Windows** ungeprüft (kein Windows hier). Einbettung + Build verifiziert; UPX behält Icon/Version-Resourcen normalerweise sichtbar.
 - **Apply-Retry (Option A)** offen: Preflight (0.10.0) deckt steady-state-Locks ab, aber Virenscanner-Flacker zwischen Probe und `sync.Apply` bleibt ein Race → bei Bedarf Retry mit Backoff in `internal/sync/apply.go::copyFile`/`os.Remove` ergänzen.
-- **0.12.0 nicht am echten Server getestet:** `conf.files` und `backup.include` sind nur durch Unit-/End-to-End-Tests abgedeckt. Beim ersten Praxistest prüfen: (1) heissen die Dateien im tEXAM-/tOSCE-Release wirklich so und liegen sie im ZIP unter `conf/`? (2) landet die alte Fassung im Backup-Archiv? (3) `dist/`-Binaries für 0.12.0 sind noch **nicht** gebaut/signiert/released.
+- **0.12.0 nicht am echten Server getestet:** `conf.files` und `backup.include` sind durch Unit-/End-to-End-Tests plus einen lokalen Smoke-Lauf abgedeckt (Prompt-Kette DE, Backup enthielt die Vor-Update-Fassung), aber nie gegen ein echtes tEXAM-/tOSCE-Release gelaufen. Beim ersten Praxistest prüfen: (1) heissen die sieben tEXAM-Dateien im Release-ZIP wirklich so und liegen sie unter `conf/`? Falls nicht, meldet tUPDATE sie als `nicht im Release - bleibt` und tut brav nichts — kein Fehler, aber auch kein Update. (2) landet die alte Fassung im Backup-Archiv? (3) `conf.files` muss **einzeilig** bleiben — der Properties-Parser kennt keine `\`-Fortsetzungszeilen.
+- **Release 0.12.0 ist raus** (Commit `bcd9757`, Tag `v0.12.0`, 7 Assets). Windows-`.exe` signiert, Ketten-Test gegen `~/.certum/root.pem` allein: `Signature verification: ok`. `windows-arm64` bleibt ungepackt (7,2 MB statt 2,6 MB) — UPX 5.2 kann `win64/arm64` weiterhin nicht.
 - Optional angeboten, nicht umgesetzt: macOS `.app`-Bundle mit `.icns`.
 
 ---
