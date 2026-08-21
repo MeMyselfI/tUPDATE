@@ -25,6 +25,16 @@ type Config struct {
 	// 0 means the key was not set, leaving the choice to the sync package.
 	DiffWorkers int
 
+	// ConfFiles lists configuration files that ship with the release and may be
+	// overwritten from it on explicit confirmation. They are never part of the
+	// regular diff. Empty means the feature is off.
+	ConfFiles []string
+
+	// BackupInclude lists extra paths (files or directories, relative to the
+	// app root) that are archived by the file backup only. They are never
+	// compared and never overwritten.
+	BackupInclude []string
+
 	ServiceStop             map[string]string
 	ServiceStart            map[string]string
 	ServiceStopTimeoutSecs  int
@@ -88,6 +98,16 @@ func FromMap(props map[string]string) (*Config, error) {
 	}
 
 	cfg.DiffWorkers, err = optionalPositiveInt(props, "diff.workers")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.ConfFiles, err = parseRelPaths(props["conf.files"], "conf.files")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.BackupInclude, err = parseRelPaths(props["backup.include"], "backup.include")
 	if err != nil {
 		return nil, err
 	}
@@ -201,9 +221,28 @@ func optionalPositiveInt(props map[string]string, key string) (int, error) {
 }
 
 func parseSyncDirectories(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("config: required key %q is missing or empty", "sync.directories")
+	}
+	out, err := parseRelPaths(raw, "sync.directories")
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("config: sync.directories: no valid entries")
+	}
+	return out, nil
+}
+
+// parseRelPaths splits a comma-separated list of app-root-relative paths and
+// rejects anything that could escape the app root. An empty value yields a nil
+// slice — callers that require entries check for that themselves. Results are
+// cleaned and use forward slashes, so a trailing "conf/" and a plain "conf"
+// produce the same entry.
+func parseRelPaths(raw, key string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, fmt.Errorf("config: required key %q is missing or empty", "sync.directories")
+		return nil, nil
 	}
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
@@ -212,17 +251,17 @@ func parseSyncDirectories(raw string) ([]string, error) {
 		if p == "" {
 			continue
 		}
-		if filepath.IsAbs(p) {
-			return nil, fmt.Errorf("config: sync.directories: absolute path not allowed: %q", p)
+		if filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) {
+			return nil, fmt.Errorf("config: %s: absolute path not allowed: %q", key, p)
 		}
-		clean := filepath.Clean(p)
+		clean := filepath.Clean(filepath.FromSlash(p))
 		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("config: sync.directories: parent traversal not allowed: %q", p)
+			return nil, fmt.Errorf("config: %s: parent traversal not allowed: %q", key, p)
 		}
-		out = append(out, p)
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("config: sync.directories: no valid entries")
+		if clean == "." {
+			return nil, fmt.Errorf("config: %s: app root itself not allowed: %q", key, p)
+		}
+		out = append(out, filepath.ToSlash(clean))
 	}
 	return out, nil
 }

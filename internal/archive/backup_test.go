@@ -290,3 +290,119 @@ func equalStringSlice(a, b []string) bool {
 	}
 	return true
 }
+
+func TestBackupDirs_IncludeDirectoryAndFile(t *testing.T) {
+	tmp := t.TempDir()
+	app := filepath.Join(tmp, "app")
+	backup := filepath.Join(tmp, "backup")
+
+	writeFileMode(t, filepath.Join(app, "bin", "run.sh"), "run\n", 0o755)
+	writeFileMode(t, filepath.Join(app, "conf", "server.properties"), "port=443\n", 0o600)
+	writeFileMode(t, filepath.Join(app, "conf", "sub", "extra.properties"), "x=1\n", 0o644)
+	writeFileMode(t, filepath.Join(app, "notes.txt"), "hello\n", 0o644)
+
+	opts := BackupOptions{Include: []string{"conf", "notes.txt", "does-not-exist"}}
+	outPath, err := BackupDirs(app, backup, []string{"bin"}, time.Now(), opts, nil)
+	if err != nil {
+		t.Fatalf("BackupDirs: %v", err)
+	}
+
+	entries := readBackup(t, outPath)
+	var names []string
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	want := []string{"bin/run.sh", "conf/server.properties", "conf/sub/extra.properties", "notes.txt"}
+	if !equalStringSlice(names, want) {
+		t.Fatalf("entries = %v, want %v", names, want)
+	}
+	if got := entries["conf/server.properties"].body; got != "port=443\n" {
+		t.Errorf("conf body = %q", got)
+	}
+}
+
+func TestBackupDirs_IncludeOverlappingSyncDirIsNotDuplicated(t *testing.T) {
+	tmp := t.TempDir()
+	app := filepath.Join(tmp, "app")
+	backup := filepath.Join(tmp, "backup")
+
+	writeFileMode(t, filepath.Join(app, "etc", "config.txt"), "k=v\n", 0o644)
+
+	// "etc/config.txt" is already covered by the "etc" sync dir. Writing the
+	// same name twice would produce an archive with duplicate members.
+	opts := BackupOptions{Include: []string{"etc", "etc/config.txt"}}
+	outPath, err := BackupDirs(app, backup, []string{"etc"}, time.Now(), opts, nil)
+	if err != nil {
+		t.Fatalf("BackupDirs: %v", err)
+	}
+
+	f, err := os.Open(outPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer f.Close()
+	xr, err := xz.NewReader(f)
+	if err != nil {
+		t.Fatalf("xz: %v", err)
+	}
+	tr := tar.NewReader(xr)
+	counts := make(map[string]int)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar next: %v", err)
+		}
+		counts[hdr.Name]++
+	}
+	if counts["etc/config.txt"] != 1 {
+		t.Errorf("etc/config.txt appears %d times, want 1", counts["etc/config.txt"])
+	}
+}
+
+func TestBackupDirs_IncludeCountsTowardsProgressTotal(t *testing.T) {
+	tmp := t.TempDir()
+	app := filepath.Join(tmp, "app")
+	backup := filepath.Join(tmp, "backup")
+
+	writeFileMode(t, filepath.Join(app, "bin", "a.bin"), strings.Repeat("a", 100), 0o644)
+	writeFileMode(t, filepath.Join(app, "conf", "b.properties"), strings.Repeat("b", 50), 0o644)
+
+	var lastTotal, lastDone int64
+	opts := BackupOptions{Include: []string{"conf"}}
+	if _, err := BackupDirs(app, backup, []string{"bin"}, time.Now(), opts, func(done, total int64) {
+		lastDone, lastTotal = done, total
+	}); err != nil {
+		t.Fatalf("BackupDirs: %v", err)
+	}
+	if lastTotal != 150 {
+		t.Errorf("total = %d, want 150", lastTotal)
+	}
+	if lastDone != 150 {
+		t.Errorf("done = %d, want 150", lastDone)
+	}
+}
+
+func TestBackupDirs_IncludeDoesNotArchiveBackupDir(t *testing.T) {
+	tmp := t.TempDir()
+	app := filepath.Join(tmp, "app")
+	backup := filepath.Join(app, "conf", "backup")
+
+	writeFileMode(t, filepath.Join(app, "conf", "server.properties"), "k=v\n", 0o644)
+
+	// backup.directory nested inside an include path must be skipped, or the
+	// walk would archive the archive it is currently writing.
+	opts := BackupOptions{Include: []string{"conf"}}
+	outPath, err := BackupDirs(app, backup, []string{}, time.Now(), opts, nil)
+	if err != nil {
+		t.Fatalf("BackupDirs: %v", err)
+	}
+	for name := range readBackup(t, outPath) {
+		if strings.HasPrefix(name, "conf/backup/") {
+			t.Errorf("archive contains its own backup dir entry %q", name)
+		}
+	}
+}

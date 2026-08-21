@@ -81,4 +81,10 @@ func ParseCompressionLevel(s string) (CompressionLevel, bool) {
 type BackupOptions struct {
 	Format BackupFormat
 	Level  CompressionLevel
+
+	// Include lists extra app-root-relative paths to archive on top of the
+	// sync directories. Each entry may be a directory (archived recursively)
+	// or a single file. Missing entries are skipped silently. Entries that
+	// overlap the sync directories are archived only once.
+	Include []string
 }

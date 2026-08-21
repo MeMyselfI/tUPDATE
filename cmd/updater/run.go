@@ -51,6 +51,7 @@ type flagSet struct {
 	noFilesBackup       bool
 	noDBBackup          bool
 	noPreflight         bool
+	updateConf          bool
 	ignoreServiceErrors bool
 	forceStartService   bool
 	downloadParts       int
@@ -288,22 +289,72 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	summary := sync.Summarize(diffs)
 	emit.Diff(summary.Added, summary.Modified, summary.Removed, diffPerDirMap(diffs))
 
+	// Configuration files are handled apart from the regular diff: they sit
+	// outside the sync dirs on purpose because they carry installation-specific
+	// settings, so they are only ever written after an explicit yes. The
+	// comparison runs before the early exits below, because a release whose only
+	// change is a new default config must not be reported as "no changes".
+	confFiles, err := sync.CompareConfFiles(refRoot, appRoot, cfg.ConfFiles)
+	if err != nil {
+		fmt.Fprintln(stderr, s.ConfFilesError, err)
+		emit.FatalError("conf_files", err.Error())
+		maybeStartService()
+		return exitSync
+	}
+	confPending := sync.ConfUpdateCount(confFiles) > 0
+	if len(confFiles) > 0 {
+		emitConfCompared(emit, confFiles)
+		if confPending {
+			fmt.Fprintln(stdout, s.ConfFilesHeader)
+			fmt.Fprint(stdout, formatConfFiles(confFiles, s))
+		} else {
+			fmt.Fprintln(stderr, s.ConfFilesUpToDate)
+			emit.ConfFilesSkipped("up_to_date")
+		}
+	}
+
 	if f.dryRun {
 		fmt.Fprintln(stderr, s.DryRunDone)
 		maybeStartService()
 		return exitOK
 	}
-	if !summary.HasChanges() {
+	if !summary.HasChanges() && !confPending {
 		fmt.Fprintln(stderr, s.NoChanges)
 		maybeStartService()
 		return exitOK
 	}
 
-	// Three-way prompt: continue / abort / show full file list.
-	if !runDiffReviewLoop(prompter, diffs, s, stdout, stderr) {
+	// Three-way prompt: continue / abort / show full file list. Skipped when the
+	// sync dirs are already in sync and only the config files differ — there is
+	// no file list to review in that case.
+	if summary.HasChanges() && !runDiffReviewLoop(prompter, diffs, s, stdout, stderr) {
 		fmt.Fprintln(stderr, s.UpdateAborted)
 		maybeStartService()
 		return exitUserAbort
+	}
+
+	// Ask whether the diverging config files should be replaced.
+	wantConf := false
+	if confPending {
+		switch {
+		case f.updateConf:
+			wantConf = true
+		case f.noPrompt:
+			// Opt-in only: automation must never silently replace a live
+			// configuration. --update-conf is the explicit way in.
+			wantConf = false
+		default:
+			wantConf, err = prompter.Confirm(s.ConfFilesQuestion, false)
+			if err != nil {
+				fmt.Fprintln(stderr, s.PromptError, err)
+				maybeStartService()
+				return exitUserAbort
+			}
+		}
+		if !wantConf {
+			fmt.Fprintln(stderr, s.ConfFilesSkipped)
+			emit.ConfFilesSkipped("declined")
+		}
 	}
 
 	// Pre-apply writability/lock check. The service is already stopped here, so
@@ -314,7 +365,11 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	// returns to the original good state.
 	if !f.noPreflight {
 		fmt.Fprintln(stderr, s.PreflightChecking)
-		if blocks := sync.Preflight(appRoot, diffs); len(blocks) > 0 {
+		blocks := sync.Preflight(appRoot, diffs)
+		if wantConf {
+			blocks = append(blocks, sync.PreflightConfFiles(appRoot, confFiles)...)
+		}
+		if len(blocks) > 0 {
 			fmt.Fprintf(stderr, s.PreflightBlocked+"\n", len(blocks))
 			for _, b := range blocks {
 				fmt.Fprintf(stderr, "  %s — %s\n", b.Path, b.Reason)
@@ -348,6 +403,7 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 			maybeStartService()
 			return exitUserAbort
 		}
+		backupOpts.Include = backupIncludePaths(cfg.BackupInclude, confFiles, wantConf)
 		fmt.Fprintf(stderr, "%s (%s / %s)\n", s.BackupCreating, backupOpts.Format, backupOpts.Level)
 		p, err := archive.BackupDirs(appRoot, backupDir, cfg.SyncDirectories, backupTs, backupOpts, ttyProgress(f))
 		if err != nil {
@@ -399,7 +455,7 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 		}
 	}
 
-	wantUpdate, err := prompter.Confirm(s.UpdateQuestion, false)
+	wantUpdate, err := prompter.Confirm(s.UpdateQuestion, true)
 	if err != nil {
 		fmt.Fprintln(stderr, s.PromptError, err)
 		maybeStartService()
@@ -429,6 +485,24 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 	fmt.Fprintln(stderr, s.UpdateSuccess)
 	emit.ApplyOK()
 
+	// After the backup and after the regular apply, so a failure here still has
+	// the untouched configs in the archive next to the rest of the rollback.
+	if wantConf {
+		fmt.Fprintln(stderr, s.ConfFilesApplying)
+		if err := sync.ApplyConfFiles(refRoot, appRoot, confFiles, nil); err != nil {
+			fmt.Fprintln(stderr, s.ConfFilesError, err)
+			emit.ConfFilesFailed(err.Error())
+			if backupPath != "" {
+				fmt.Fprintln(stderr, s.RestoreFromBackup, backupPath)
+			}
+			maybeStartService()
+			return exitSync
+		}
+		n := sync.ConfUpdateCount(confFiles)
+		fmt.Fprintf(stderr, s.ConfFilesDone+"\n", n)
+		emit.ConfFilesApplied(n)
+	}
+
 	// Same gate as every abort path above, but here a failed start is worth an
 	// exit code: the update landed and the service should be back up.
 	if maybeStartService() == startFailed {
@@ -440,6 +514,65 @@ func runApp(stdin io.Reader, stdout, stderr, emitWriter io.Writer, args []string
 
 	fmt.Fprintln(stderr, s.Done)
 	return exitOK
+}
+
+// formatConfFiles renders the conf.files comparison as an indented list, one
+// line per entry, states localized. Entries the release does not ship are shown
+// too so a stale conf.files entry is visible instead of silently ignored.
+func formatConfFiles(files []sync.ConfFile, s i18n.Strings) string {
+	var b strings.Builder
+	for _, f := range files {
+		var state string
+		switch f.State {
+		case sync.ConfModified:
+			state = s.ConfStateModified
+		case sync.ConfMissingLive:
+			state = s.ConfStateNew
+		case sync.ConfMissingRef:
+			state = s.ConfStateMissingRef
+		default:
+			continue // identical files are not worth a line
+		}
+		fmt.Fprintf(&b, "  %s (%s)\n", f.Path, state)
+	}
+	return b.String()
+}
+
+// emitConfCompared publishes the per-state counts of the conf.files comparison.
+func emitConfCompared(emit *machine.Emitter, files []sync.ConfFile) {
+	var modified, missingLive, missingRef, same int
+	for _, f := range files {
+		switch f.State {
+		case sync.ConfModified:
+			modified++
+		case sync.ConfMissingLive:
+			missingLive++
+		case sync.ConfMissingRef:
+			missingRef++
+		default:
+			same++
+		}
+	}
+	emit.ConfFilesCompared(modified, missingLive, missingRef, same)
+}
+
+// backupIncludePaths merges the configured backup-only paths with the conf
+// files that are about to be overwritten. The conf files are added even though
+// backup.include usually already covers their directory: relying on that
+// overlap would silently drop the rollback copy the moment someone trims
+// backup.include. Duplicates are collapsed by the archive writer.
+func backupIncludePaths(include []string, confFiles []sync.ConfFile, wantConf bool) []string {
+	if !wantConf {
+		return include
+	}
+	out := make([]string, 0, len(include)+len(confFiles))
+	out = append(out, include...)
+	for _, f := range confFiles {
+		if f.State == sync.ConfModified {
+			out = append(out, f.Path)
+		}
+	}
+	return out
 }
 
 // startOutcome is the result of an attempted service start. startSkipped means
@@ -1227,6 +1360,7 @@ func parseFlags(args []string, stdout, stderr io.Writer) (*flagSet, error) {
 	fs.BoolVar(&f.noFilesBackup, "no-files-backup", false, "ZIP-Backup ueberspringen / skip files (ZIP) backup")
 	fs.BoolVar(&f.noDBBackup, "no-db-backup", false, "DB-Backup (pg_dump) ueberspringen / skip DB backup")
 	fs.BoolVar(&f.noPreflight, "no-preflight", false, "Schreibrechte-/Lock-Check der Zieldateien vor Apply ueberspringen / skip pre-apply writability check")
+	fs.BoolVar(&f.updateConf, "update-conf", false, "Konfigurationsdateien aus conf.files ohne Rueckfrage ueberschreiben / overwrite the conf.files list without asking")
 	fs.BoolVar(&f.ignoreServiceErrors, "ignore-service-errors", false, "bei Stop/Start-Fehler weitermachen / continue past service stop/start failures")
 	fs.BoolVar(&f.forceStartService, "force-start-service", false, "Service am Ende immer starten, auch wenn tUPDATE ihn nicht gestoppt hat / always start the service at the end")
 	fs.IntVar(&f.downloadParts, "download-parts", 0, "parallele Download-Verbindungen, 1 = aus (Default: download.parallel.parts, sonst 4)")
@@ -1279,6 +1413,10 @@ SERVICE
   --no-preflight           Schreibrechte-/Lock-Check der Zieldateien vor Apply
                            auslassen (Default: an; bricht ab, wenn eine Zieldatei
                            gesperrt/read-only/nicht anlegbar ist)
+  --update-conf            die in conf.files gelisteten Konfigurationsdateien
+                           ohne Rueckfrage aus dem Release ueberschreiben.
+                           Ohne Flag wird interaktiv gefragt (Default: Nein),
+                           unter --no-prompt bleiben sie unveraendert.
 
 BACKUP
   --no-files-backup        Datei-Backup-Schritt komplett ueberspringen (Prompt entfaellt)

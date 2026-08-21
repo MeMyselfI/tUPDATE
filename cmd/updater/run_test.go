@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ulikunitz/xz"
 )
 
 func writeFile(t *testing.T, path, body string) {
@@ -1257,5 +1260,346 @@ func TestRunApp_DeclineStopOnUnknownStateLeavesServiceAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(startMarker); err == nil {
 		t.Error("start command ran although the service was never stopped")
+	}
+}
+
+// writePropertiesWithExtra writes the standard test properties plus extra keys.
+func writePropertiesWithExtra(t *testing.T, dir, extra string) string {
+	t.Helper()
+	conf := writeProperties(t, dir)
+	f, err := os.OpenFile(conf, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\n" + extra + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	return conf
+}
+
+// backupMembers returns the member names of the single tar.xz backup archive
+// written below live/backup.
+func backupMembers(t *testing.T, live string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(live, "backup"))
+	if err != nil {
+		t.Fatalf("backup dir missing: %v", err)
+	}
+	var archivePath string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tar.xz") {
+			archivePath = filepath.Join(live, "backup", e.Name())
+		}
+	}
+	if archivePath == "" {
+		t.Fatalf("no .tar.xz backup in %v", entries)
+	}
+	f, err := os.Open(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	xr, err := xz.NewReader(f)
+	if err != nil {
+		t.Fatalf("xz reader: %v", err)
+	}
+	tr := tar.NewReader(xr)
+	out := make(map[string]string)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar next: %v", err)
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			continue
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[hdr.Name] = string(body)
+	}
+	return out
+}
+
+// confTestSetup builds a live tree with one diverging conf file plus a normal
+// sync-dir change, and returns the config path and the zip path.
+func confTestSetup(t *testing.T, live, zipPath, extraKeys string) string {
+	t.Helper()
+	confPath := writePropertiesWithExtra(t, live, extraKeys)
+	buildZip(t, zipPath, map[string]string{
+		"bin/run.sh":                      "V2-run\n",
+		"conf/server-defaults.properties": "port=8443\n",
+	})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "V1-run\n")
+	writeFile(t, filepath.Join(live, "conf", "server-defaults.properties"), "port=443\n")
+	return confPath
+}
+
+func TestRunApp_ConfFilesNotOverwrittenWithoutFlagUnderNoPrompt(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := confTestSetup(t, live, zipPath,
+		"conf.files = conf/server-defaults.properties")
+
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-prompt", "--no-db-backup",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+
+	got, _ := os.ReadFile(filepath.Join(live, "conf", "server-defaults.properties"))
+	if string(got) != "port=443\n" {
+		t.Errorf("conf file = %q, want untouched port=443", got)
+	}
+	// The sync dirs must still have been updated.
+	run, _ := os.ReadFile(filepath.Join(live, "bin", "run.sh"))
+	if string(run) != "V2-run\n" {
+		t.Errorf("bin/run.sh = %q, want V2", run)
+	}
+}
+
+func TestRunApp_UpdateConfOverwritesAndBacksUpConfFile(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := confTestSetup(t, live, zipPath,
+		"conf.files = conf/server-defaults.properties")
+
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-prompt", "--no-db-backup", "--update-conf",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+
+	got, _ := os.ReadFile(filepath.Join(live, "conf", "server-defaults.properties"))
+	if string(got) != "port=8443\n" {
+		t.Errorf("conf file = %q, want overwritten port=8443", got)
+	}
+
+	// The pre-update version must be recoverable from the backup archive.
+	members := backupMembers(t, live)
+	old, ok := members["conf/server-defaults.properties"]
+	if !ok {
+		t.Fatalf("conf file missing from backup, members: %v", keysOf(members))
+	}
+	if old != "port=443\n" {
+		t.Errorf("backed-up conf = %q, want the pre-update port=443", old)
+	}
+}
+
+func TestRunApp_BackupIncludeArchivesPathsThatAreNeverSynced(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := confTestSetup(t, live, zipPath, "backup.include = conf")
+	writeFile(t, filepath.Join(live, "conf", "local-only.properties"), "secret=1\n")
+
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-prompt", "--no-db-backup",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+
+	members := backupMembers(t, live)
+	if _, ok := members["conf/local-only.properties"]; !ok {
+		t.Errorf("backup.include path missing from archive, members: %v", keysOf(members))
+	}
+	// backup.include must not cause an update of those files.
+	got, _ := os.ReadFile(filepath.Join(live, "conf", "server-defaults.properties"))
+	if string(got) != "port=443\n" {
+		t.Errorf("conf file = %q, backup.include must never overwrite", got)
+	}
+}
+
+func TestRunApp_ConfPromptDeclinedLeavesConfAlone(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := confTestSetup(t, live, zipPath,
+		"conf.files = conf/server-defaults.properties")
+
+	// diff review -> continue, conf prompt -> no, update -> yes
+	stdin := strings.NewReader("y\nn\ny\n")
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-files-backup", "--no-db-backup",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "conf/server-defaults.properties") {
+		t.Errorf("conf file list not shown, stdout:\n%s", stdout.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "conf", "server-defaults.properties"))
+	if string(got) != "port=443\n" {
+		t.Errorf("conf file = %q, want untouched", got)
+	}
+}
+
+func TestRunApp_ConfPromptAcceptedOverwrites(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := confTestSetup(t, live, zipPath,
+		"conf.files = conf/server-defaults.properties")
+
+	// diff review -> continue, conf prompt -> yes, update -> yes
+	stdin := strings.NewReader("y\ny\ny\n")
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-files-backup", "--no-db-backup",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "conf", "server-defaults.properties"))
+	if string(got) != "port=8443\n" {
+		t.Errorf("conf file = %q, want port=8443", got)
+	}
+}
+
+func TestRunApp_UpdateQuestionDefaultsToYes(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writeProperties(t, live)
+
+	buildZip(t, zipPath, map[string]string{"bin/run.sh": "V2-run\n"})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "V1-run\n")
+
+	// diff review -> continue, update question -> bare Enter = accept the default
+	stdin := strings.NewReader("y\n\n")
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-files-backup", "--no-db-backup",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(stdin, &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "bin", "run.sh"))
+	if string(got) != "V2-run\n" {
+		t.Errorf("bin/run.sh = %q — bare Enter should have applied the update", got)
+	}
+	if !strings.Contains(stdout.String(), "[Y/n]") {
+		t.Errorf("update question should render the yes-default suffix, stdout:\n%s", stdout.String())
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func TestRunApp_ConfOnlyChangeIsNotReportedAsNoChanges(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writePropertiesWithExtra(t, live,
+		"conf.files = conf/server-defaults.properties")
+
+	// The sync dirs are already identical; only the config file differs.
+	buildZip(t, zipPath, map[string]string{
+		"bin/run.sh":                      "V1-run\n",
+		"conf/server-defaults.properties": "port=8443\n",
+	})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "V1-run\n")
+	writeFile(t, filepath.Join(live, "conf", "server-defaults.properties"), "port=443\n")
+
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-prompt", "--no-db-backup", "--no-files-backup",
+		"--update-conf",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "conf", "server-defaults.properties"))
+	if string(got) != "port=8443\n" {
+		t.Errorf("conf file = %q — a conf-only release must still be applied", got)
+	}
+}
+
+func TestRunApp_ConfFileMissingFromReleaseIsKept(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := writePropertiesWithExtra(t, live,
+		"conf.files = conf/server-defaults.properties, conf/dropped.properties")
+
+	buildZip(t, zipPath, map[string]string{
+		"bin/run.sh":                      "V2-run\n",
+		"conf/server-defaults.properties": "port=8443\n",
+	})
+	writeFile(t, filepath.Join(live, "bin", "run.sh"), "V1-run\n")
+	writeFile(t, filepath.Join(live, "conf", "server-defaults.properties"), "port=443\n")
+	writeFile(t, filepath.Join(live, "conf", "dropped.properties"), "keep=me\n")
+
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-prompt", "--no-db-backup", "--no-files-backup",
+		"--update-conf",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "conf", "dropped.properties"))
+	if string(got) != "keep=me\n" {
+		t.Errorf("dropped.properties = %q — a file the release does not ship must survive", got)
+	}
+}
+
+func TestRunApp_DryRunListsConfFileDifferences(t *testing.T) {
+	forceLocale(t, "en_US.UTF-8")
+	tmp := t.TempDir()
+	live := filepath.Join(tmp, "live")
+	zipPath := filepath.Join(tmp, "ref.zip")
+	confPath := confTestSetup(t, live, zipPath,
+		"conf.files = conf/server-defaults.properties")
+
+	args := []string{
+		"--zip", zipPath, "--config", confPath, "--app-root", live,
+		"--skip-service", "--no-prompt", "--dry-run",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runApp(strings.NewReader(""), &stdout, &stderr, io.Discard, args, "test"); code != exitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "conf/server-defaults.properties") {
+		t.Errorf("dry-run should list diverging conf files, stdout:\n%s", stdout.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(live, "conf", "server-defaults.properties"))
+	if string(got) != "port=443\n" {
+		t.Errorf("dry-run must not write anything, conf = %q", got)
 	}
 }

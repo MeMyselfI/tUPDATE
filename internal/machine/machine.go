@@ -225,6 +225,41 @@ func (e *Emitter) PreflightFailed(count int) {
 	})
 }
 
+// ConfFilesCompared reports the outcome of the conf.files comparison.
+func (e *Emitter) ConfFilesCompared(modified, missingLive, missingRef, same int) {
+	e.emit(map[string]any{
+		"event":        "conf_files_compared",
+		"modified":     modified,
+		"missing_live": missingLive,
+		"missing_ref":  missingRef,
+		"same":         same,
+	})
+}
+
+// ConfFilesSkipped reports that the conf files were left untouched.
+func (e *Emitter) ConfFilesSkipped(reason string) {
+	e.emit(map[string]any{
+		"event":  "conf_files_skipped",
+		"reason": reason,
+	})
+}
+
+// ConfFilesApplied reports how many conf files were overwritten.
+func (e *Emitter) ConfFilesApplied(count int) {
+	e.emit(map[string]any{
+		"event": "conf_files_applied",
+		"count": count,
+	})
+}
+
+// ConfFilesFailed reports that overwriting the conf files failed.
+func (e *Emitter) ConfFilesFailed(reason string) {
+	e.emit(map[string]any{
+		"event":  "conf_files_failed",
+		"reason": reason,
+	})
+}
+
 // DryRunCheck fires once per pre-flight check during --dry-run, carrying its
 // name, ok-flag, and a free-text detail (path, status code, error message).
 func (e *Emitter) DryRunCheck(name string, ok bool, detail string) {

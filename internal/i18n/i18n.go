@@ -121,6 +121,18 @@ type Strings struct {
 	PreflightChecking string // "Checking write access to target files..."
 	PreflightBlocked  string // "Update aborted: %d file(s) locked or not writable:"
 
+	// Configuration files (conf.files) — overwritten only on confirmation
+	ConfFilesHeader     string // "Configuration files shipped with this release:"
+	ConfFilesUpToDate   string // "Configuration files are already up to date."
+	ConfFilesQuestion   string // "Overwrite these configuration files?"
+	ConfFilesSkipped    string // "Configuration files left unchanged."
+	ConfFilesApplying   string // "Updating configuration files..."
+	ConfFilesDone       string // "Configuration files updated: %d"
+	ConfFilesError      string // "Error while updating configuration files:"
+	ConfStateModified   string // "differs"
+	ConfStateNew        string // "not present yet"
+	ConfStateMissingRef string // "not in release"
+
 	// Prompt UI
 	SuffixYesDefault string // shown when default=true, e.g. "[Y/n]"
 	SuffixNoDefault  string // shown when default=false, e.g. "[y/N]"
@@ -198,8 +210,18 @@ var en = Strings{
 	Done:                         "Done.",
 	ContinueAnyway:               "Continue anyway?",
 
-	PreflightChecking: "Checking write access to target files...",
-	PreflightBlocked:  "Update aborted: %d file(s) locked or not writable:",
+	PreflightChecking:   "Checking write access to target files...",
+	PreflightBlocked:    "Update aborted: %d file(s) locked or not writable:",
+	ConfFilesHeader:     "Configuration files shipped with this release:",
+	ConfFilesUpToDate:   "Configuration files are already up to date.",
+	ConfFilesQuestion:   "Overwrite these configuration files with the version from the release?",
+	ConfFilesSkipped:    "Configuration files left unchanged.",
+	ConfFilesApplying:   "Updating configuration files...",
+	ConfFilesDone:       "Configuration files updated: %d",
+	ConfFilesError:      "Error while updating configuration files:",
+	ConfStateModified:   "differs",
+	ConfStateNew:        "not present yet",
+	ConfStateMissingRef: "not in release - kept",
 
 	SuffixYesDefault: "[Y/n]",
 	SuffixNoDefault:  "[y/N]",
@@ -277,8 +299,18 @@ var de = Strings{
 	Done:                         "Fertig.",
 	ContinueAnyway:               "Trotzdem fortfahren?",
 
-	PreflightChecking: "Schreibrechte der Zieldateien prüfen...",
-	PreflightBlocked:  "Update abgebrochen: %d Datei(en) gesperrt oder nicht schreibbar:",
+	PreflightChecking:   "Schreibrechte der Zieldateien prüfen...",
+	PreflightBlocked:    "Update abgebrochen: %d Datei(en) gesperrt oder nicht schreibbar:",
+	ConfFilesHeader:     "Konfigurationsdateien aus diesem Release:",
+	ConfFilesUpToDate:   "Konfigurationsdateien sind bereits aktuell.",
+	ConfFilesQuestion:   "Diese Konfigurationsdateien mit der Version aus dem Release überschreiben?",
+	ConfFilesSkipped:    "Konfigurationsdateien bleiben unverändert.",
+	ConfFilesApplying:   "Konfigurationsdateien werden aktualisiert...",
+	ConfFilesDone:       "Konfigurationsdateien aktualisiert: %d",
+	ConfFilesError:      "Fehler beim Aktualisieren der Konfigurationsdateien:",
+	ConfStateModified:   "abweichend",
+	ConfStateNew:        "noch nicht vorhanden",
+	ConfStateMissingRef: "nicht im Release - bleibt",
 
 	SuffixYesDefault: "[J/n]",
 	SuffixNoDefault:  "[j/N]",
@@ -356,8 +388,18 @@ var fr = Strings{
 	Done:                         "Terminé.",
 	ContinueAnyway:               "Continuer malgré tout ?",
 
-	PreflightChecking: "Vérification des droits d'écriture sur les fichiers cibles...",
-	PreflightBlocked:  "Mise à jour annulée : %d fichier(s) verrouillé(s) ou non inscriptible(s) :",
+	PreflightChecking:   "Vérification des droits d'écriture sur les fichiers cibles...",
+	PreflightBlocked:    "Mise à jour annulée : %d fichier(s) verrouillé(s) ou non inscriptible(s) :",
+	ConfFilesHeader:     "Fichiers de configuration fournis avec cette version :",
+	ConfFilesUpToDate:   "Les fichiers de configuration sont déjà à jour.",
+	ConfFilesQuestion:   "Remplacer ces fichiers de configuration par la version du release ?",
+	ConfFilesSkipped:    "Fichiers de configuration inchangés.",
+	ConfFilesApplying:   "Mise à jour des fichiers de configuration...",
+	ConfFilesDone:       "Fichiers de configuration mis à jour : %d",
+	ConfFilesError:      "Erreur lors de la mise à jour des fichiers de configuration :",
+	ConfStateModified:   "différent",
+	ConfStateNew:        "absent",
+	ConfStateMissingRef: "absent du release - conservé",
 
 	SuffixYesDefault: "[O/n]",
 	SuffixNoDefault:  "[o/N]",

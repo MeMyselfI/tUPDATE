@@ -340,3 +340,73 @@ func TestFromMap_OptionalTuningKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestFromMap_ConfFilesAndBackupIncludeAbsentByDefault(t *testing.T) {
+	cfg, err := loadFromString(t, validConf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.ConfFiles) != 0 {
+		t.Errorf("ConfFiles = %v, want empty", cfg.ConfFiles)
+	}
+	if len(cfg.BackupInclude) != 0 {
+		t.Errorf("BackupInclude = %v, want empty", cfg.BackupInclude)
+	}
+}
+
+func TestFromMap_ConfFilesParsed(t *testing.T) {
+	conf := validConf + "\nconf.files = conf/server-defaults.properties, conf/db-defaults.properties\n"
+	cfg, err := loadFromString(t, conf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"conf/server-defaults.properties", "conf/db-defaults.properties"}
+	if len(cfg.ConfFiles) != len(want) {
+		t.Fatalf("ConfFiles = %v, want %v", cfg.ConfFiles, want)
+	}
+	for i, w := range want {
+		if cfg.ConfFiles[i] != w {
+			t.Errorf("ConfFiles[%d] = %q, want %q", i, cfg.ConfFiles[i], w)
+		}
+	}
+}
+
+func TestFromMap_BackupIncludeNormalizesTrailingSlash(t *testing.T) {
+	conf := validConf + "\nbackup.include = conf/, extra/notes.txt\n"
+	cfg, err := loadFromString(t, conf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"conf", "extra/notes.txt"}
+	if len(cfg.BackupInclude) != len(want) {
+		t.Fatalf("BackupInclude = %v, want %v", cfg.BackupInclude, want)
+	}
+	for i, w := range want {
+		if cfg.BackupInclude[i] != w {
+			t.Errorf("BackupInclude[%d] = %q, want %q", i, cfg.BackupInclude[i], w)
+		}
+	}
+}
+
+func TestFromMap_ConfFilesRejectsEscapingPaths(t *testing.T) {
+	cases := map[string]string{
+		"absolute":  "/etc/passwd",
+		"traversal": "../../etc/passwd",
+		"app root":  ".",
+	}
+	for name, path := range cases {
+		t.Run(name, func(t *testing.T) {
+			conf := validConf + "\nconf.files = " + path + "\n"
+			if _, err := loadFromString(t, conf); err == nil {
+				t.Fatalf("expected error for %q", path)
+			}
+		})
+	}
+}
+
+func TestFromMap_BackupIncludeRejectsTraversal(t *testing.T) {
+	conf := validConf + "\nbackup.include = conf, ../secrets\n"
+	if _, err := loadFromString(t, conf); err == nil {
+		t.Fatal("expected error for parent traversal in backup.include")
+	}
+}

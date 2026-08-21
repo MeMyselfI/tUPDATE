@@ -23,7 +23,7 @@ const BackupTimestampFormat = "2006-01-02-15-04-05"
 // file sizes computed up front. progress callbacks may be nil.
 type Progress func(done, total int64)
 
-// BackupDirs writes the given dirs (under appRoot) into
+// BackupDirs writes the given dirs (under appRoot) plus opts.Include into
 // backupDir/<timestamp><ext> using the format and compression level in opts.
 // Dirs that don't exist are silently skipped. Symbolic links are skipped.
 // If progress is non-nil it is called as bytes are processed.
@@ -38,7 +38,7 @@ func BackupDirs(appRoot, backupDir string, dirs []string, ts time.Time, opts Bac
 	// is currently writing — an ever-growing file that never finishes.
 	skipDir := filepath.Clean(backupDir)
 
-	total, err := totalBytes(appRoot, dirs, skipDir)
+	entries, total, err := collectEntries(appRoot, dirs, opts.Include, skipDir)
 	if err != nil {
 		return "", err
 	}
@@ -58,15 +58,120 @@ func BackupDirs(appRoot, backupDir string, dirs []string, ts time.Time, opts Bac
 
 	switch opts.Format {
 	case FormatZip:
-		err = writeZipBackup(out, appRoot, dirs, skipDir, opts.Level, total, progress)
+		err = writeZipBackup(out, entries, opts.Level, total, progress)
 	default:
-		err = writeTarXzBackup(out, appRoot, dirs, skipDir, opts.Level, total, progress)
+		err = writeTarXzBackup(out, entries, opts.Level, total, progress)
 	}
 	if err != nil {
 		os.Remove(outPath)
 		return "", err
 	}
 	return outPath, nil
+}
+
+// backupEntry is one resolved archive member: a directory marker or a regular
+// file, already named relative to the app root.
+type backupEntry struct {
+	name  string // archive name, forward slashes, no trailing "/" for dirs
+	path  string // source path on disk
+	isDir bool
+	info  fs.FileInfo
+}
+
+// collectEntries resolves the sync dirs and the extra include paths into a flat,
+// de-duplicated list of archive members and the total number of file bytes.
+//
+// Resolving up front (rather than walking inside each writer) keeps the two
+// format writers identical in behaviour and makes de-duplication possible: an
+// include path may well sit inside a sync directory, and writing the same name
+// twice would produce a broken archive.
+func collectEntries(appRoot string, dirs, include []string, skipDir string) ([]backupEntry, int64, error) {
+	var (
+		entries []backupEntry
+		total   int64
+	)
+	seen := make(map[string]bool)
+
+	add := func(path string, d fs.DirEntry) error {
+		if !d.IsDir() && !d.Type().IsRegular() {
+			return nil // skip symlinks etc.
+		}
+		rel, err := filepath.Rel(appRoot, path)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(rel)
+		if seen[name] {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		seen[name] = true
+		entries = append(entries, backupEntry{name: name, path: path, isDir: d.IsDir(), info: info})
+		if !d.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	}
+
+	walk := func(srcRoot string) error {
+		return filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() && filepath.Clean(path) == skipDir {
+				return filepath.SkipDir
+			}
+			return add(path, d)
+		})
+	}
+
+	for _, dir := range dirs {
+		srcRoot := filepath.Join(appRoot, filepath.FromSlash(dir))
+		info, err := os.Lstat(srcRoot)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, 0, fmt.Errorf("backup: stat %s: %w", srcRoot, err)
+		}
+		if !info.IsDir() {
+			return nil, 0, fmt.Errorf("backup: %s is not a directory", srcRoot)
+		}
+		if err := walk(srcRoot); err != nil {
+			return nil, 0, err
+		}
+	}
+
+	// Include entries may be files or directories. Unlike sync dirs, a plain
+	// file is a legitimate entry here, and a missing path is never an error —
+	// the list is a best-effort safety net, not part of the update contract.
+	for _, inc := range include {
+		src := filepath.Join(appRoot, filepath.FromSlash(inc))
+		info, err := os.Lstat(src)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, 0, fmt.Errorf("backup: stat %s: %w", src, err)
+		}
+		if filepath.Clean(src) == skipDir {
+			continue
+		}
+		if info.IsDir() {
+			if err := walk(src); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+		if err := add(src, fs.FileInfoToDirEntry(info)); err != nil {
+			return nil, 0, err
+		}
+	}
+
+	return entries, total, nil
 }
 
 // xzConfig maps a CompressionLevel to xz/LZMA2 writer parameters. min and
@@ -95,7 +200,7 @@ func flateLevel(level CompressionLevel) int {
 	}
 }
 
-func writeTarXzBackup(out io.Writer, appRoot string, dirs []string, skipDir string, level CompressionLevel, total int64, progress Progress) error {
+func writeTarXzBackup(out io.Writer, entries []backupEntry, level CompressionLevel, total int64, progress Progress) error {
 	xw, err := xzConfig(level).NewWriter(out)
 	if err != nil {
 		return fmt.Errorf("backup: init xz: %w", err)
@@ -103,8 +208,8 @@ func writeTarXzBackup(out io.Writer, appRoot string, dirs []string, skipDir stri
 	tw := tar.NewWriter(xw)
 
 	var done int64
-	for _, dir := range dirs {
-		if err := addDirToTar(tw, appRoot, dir, skipDir, &done, total, progress); err != nil {
+	for _, e := range entries {
+		if err := addEntryToTar(tw, e, &done, total, progress); err != nil {
 			tw.Close()
 			xw.Close()
 			return err
@@ -120,7 +225,7 @@ func writeTarXzBackup(out io.Writer, appRoot string, dirs []string, skipDir stri
 	return nil
 }
 
-func writeZipBackup(out io.Writer, appRoot string, dirs []string, skipDir string, level CompressionLevel, total int64, progress Progress) error {
+func writeZipBackup(out io.Writer, entries []backupEntry, level CompressionLevel, total int64, progress Progress) error {
 	zw := zip.NewWriter(out)
 	lvl := flateLevel(level)
 	zw.RegisterCompressor(zip.Deflate, func(w io.Writer) (io.WriteCloser, error) {
@@ -128,8 +233,8 @@ func writeZipBackup(out io.Writer, appRoot string, dirs []string, skipDir string
 	})
 
 	var done int64
-	for _, dir := range dirs {
-		if err := addDirToZip(zw, appRoot, dir, skipDir, &done, total, progress); err != nil {
+	for _, e := range entries {
+		if err := addEntryToZip(zw, e, &done, total, progress); err != nil {
 			zw.Close()
 			return err
 		}
@@ -140,179 +245,87 @@ func writeZipBackup(out io.Writer, appRoot string, dirs []string, skipDir string
 	return nil
 }
 
-// totalBytes sums the sizes of all regular files under the given dirs so the
-// progress callback has a denominator. Missing dirs and skipDir are skipped.
-func totalBytes(appRoot string, dirs []string, skipDir string) (int64, error) {
-	var total int64
-	for _, dir := range dirs {
-		srcRoot := filepath.Join(appRoot, dir)
-		if _, err := os.Lstat(srcRoot); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return 0, fmt.Errorf("backup: stat %s: %w", srcRoot, err)
-		}
-		err := filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if d.IsDir() && filepath.Clean(path) == skipDir {
-				return filepath.SkipDir
-			}
-			if d.Type().IsRegular() {
-				fi, err := d.Info()
-				if err != nil {
-					return err
-				}
-				total += fi.Size()
-			}
-			return nil
-		})
-		if err != nil {
-			return 0, err
-		}
+func addEntryToTar(tw *tar.Writer, e backupEntry, done *int64, total int64, progress Progress) error {
+	hdr, err := tar.FileInfoHeader(e.info, "")
+	if err != nil {
+		return err
 	}
-	return total, nil
+	hdr.Name = e.name
+	if e.isDir {
+		hdr.Name += "/"
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("backup: tar header %s: %w", e.name, err)
+	}
+	if e.isDir {
+		return nil
+	}
+	return copyIntoArchive(tw, e, done, total, progress)
 }
 
-func addDirToTar(tw *tar.Writer, appRoot, dir, skipDir string, done *int64, total int64, progress Progress) error {
-	srcRoot := filepath.Join(appRoot, dir)
-	info, err := os.Lstat(srcRoot)
+func addEntryToZip(zw *zip.Writer, e backupEntry, done *int64, total int64, progress Progress) error {
+	hdr, err := zip.FileInfoHeader(e.info)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("backup: stat %s: %w", srcRoot, err)
+		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("backup: %s is not a directory", srcRoot)
+	hdr.Name = e.name
+	hdr.Method = zip.Deflate
+	if e.isDir {
+		hdr.Name += "/"
+		hdr.Method = zip.Store
 	}
-
-	return filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if d.IsDir() && filepath.Clean(path) == skipDir {
-			return filepath.SkipDir
-		}
-
-		if !d.IsDir() && !d.Type().IsRegular() {
-			return nil // skip symlinks etc.
-		}
-
-		rel, err := filepath.Rel(appRoot, path)
-		if err != nil {
-			return err
-		}
-		name := filepath.ToSlash(rel)
-
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-		hdr, err := tar.FileInfoHeader(fi, "")
-		if err != nil {
-			return err
-		}
-		hdr.Name = name
-		if d.IsDir() {
-			hdr.Name += "/"
-		}
-
-		if err := tw.WriteHeader(hdr); err != nil {
-			return fmt.Errorf("backup: tar header %s: %w", name, err)
-		}
-		if d.IsDir() {
-			return nil
-		}
-
-		src, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("backup: open %s: %w", path, err)
-		}
-		defer src.Close()
-
-		cw := &countingWriter{w: tw, done: done, total: total, progress: progress}
-		if _, err := io.Copy(cw, src); err != nil {
-			return fmt.Errorf("backup: write %s: %w", name, err)
-		}
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		return fmt.Errorf("backup: zip header %s: %w", e.name, err)
+	}
+	if e.isDir {
 		return nil
-	})
+	}
+	return copyIntoArchive(w, e, done, total, progress)
 }
 
-func addDirToZip(zw *zip.Writer, appRoot, dir, skipDir string, done *int64, total int64, progress Progress) error {
-	srcRoot := filepath.Join(appRoot, dir)
-	info, err := os.Lstat(srcRoot)
+// copyIntoArchive streams one regular file into the archive writer while
+// reporting progress.
+//
+// Exactly e.info.Size() bytes are written: the tar header was emitted from the
+// size stat'ed during collection, and tar.Writer rejects both a short and an
+// over-long body. A file that grew in the meantime is truncated, one that
+// shrank is zero-padded — either way the archive stays readable instead of
+// failing the whole backup over a file that moved under us.
+func copyIntoArchive(w io.Writer, e backupEntry, done *int64, total int64, progress Progress) error {
+	src, err := os.Open(e.path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("backup: stat %s: %w", srcRoot, err)
+		return fmt.Errorf("backup: open %s: %w", e.path, err)
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("backup: %s is not a directory", srcRoot)
+	defer src.Close()
+
+	cw := &countingWriter{w: w, done: done, total: total, progress: progress}
+	n, err := io.CopyN(cw, src, e.info.Size())
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("backup: write %s: %w", e.name, err)
 	}
+	if missing := e.info.Size() - n; missing > 0 {
+		if _, err := io.CopyN(cw, zeroReader{}, missing); err != nil {
+			return fmt.Errorf("backup: pad %s: %w", e.name, err)
+		}
+	}
+	return nil
+}
 
-	return filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
+// zeroReader is an endless source of zero bytes used to pad a file that shrank
+// between stat and copy.
+type zeroReader struct{}
 
-		if d.IsDir() && filepath.Clean(path) == skipDir {
-			return filepath.SkipDir
-		}
-
-		if !d.IsDir() && !d.Type().IsRegular() {
-			return nil // skip symlinks etc.
-		}
-
-		rel, err := filepath.Rel(appRoot, path)
-		if err != nil {
-			return err
-		}
-		name := filepath.ToSlash(rel)
-
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-		hdr, err := zip.FileInfoHeader(fi)
-		if err != nil {
-			return err
-		}
-		hdr.Name = name
-		hdr.Method = zip.Deflate
-		if d.IsDir() {
-			hdr.Name += "/"
-			hdr.Method = zip.Store
-		}
-
-		w, err := zw.CreateHeader(hdr)
-		if err != nil {
-			return fmt.Errorf("backup: zip header %s: %w", name, err)
-		}
-		if d.IsDir() {
-			return nil
-		}
-
-		src, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("backup: open %s: %w", path, err)
-		}
-		defer src.Close()
-
-		cw := &countingWriter{w: w, done: done, total: total, progress: progress}
-		if _, err := io.Copy(cw, src); err != nil {
-			return fmt.Errorf("backup: write %s: %w", name, err)
-		}
-		return nil
-	})
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }
 
 // countingWriter forwards writes to the underlying archive writer while
 // reporting cumulative progress. It counts uncompressed input bytes, which
-// matches the up-front total from totalBytes.
+// matches the up-front total from collectEntries.
 type countingWriter struct {
 	w        io.Writer
 	done     *int64
